@@ -1,0 +1,65 @@
+* macOS build files
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+*~
+
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+out/
+
+# Compiled binaries
+*.dylib
+*.so
+*.dll
+*.exe
+*.o
+*.a
+
+# IDE files
+.vscode/
+.idea/
+*.xcworkspace
+*.xcodeproj/
+*.user
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+
+# Unit test / coverage reports
+coverage/
+.coverage
+htmlcov/
+
+# Mods (user-created)
+mods/*/data/*.sqlite
+
+# Node modules (if using node tools)
+node_modules/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+
+# Documentation
+docs/_build/
+docs/.doctrees/

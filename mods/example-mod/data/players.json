@@ -1,0 +1,38 @@
+{
+  "players": [
+    {
+      "id": "player_001",
+      "first_name": "John",
+      "last_name": "Doe",
+      "position": "PG",
+      "height": 1.83,
+      "weight": 86,
+      "year_in_school": 2,
+      "pace": 17,
+      "shooting": 15,
+      "ball_control": 18,
+      "defense": 14,
+      "physical": 13,
+      "technical": 16,
+      "current_ability": 78,
+      "potential_ability": 88
+    },
+    {
+      "id": "player_002",
+      "first_name": "Michael",
+      "last_name": "Smith",
+      "position": "SF",
+      "height": 2.01,
+      "weight": 104,
+      "year_in_school": 3,
+      "pace": 16,
+      "shooting": 17,
+      "ball_control": 14,
+      "defense": 16,
+      "physical": 17,
+      "technical": 13,
+      "current_ability": 82,
+      "potential_ability": 85
+    }
+  ]
+}

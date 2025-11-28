@@ -1,0 +1,15 @@
+{
+  "teams": [
+    {
+      "id": "example_team",
+      "name": "Example Wildcats",
+      "conference_id": "ACC",
+      "city": "Chapel Hill",
+      "state": "NC",
+      "arena": "Dean Smith Center",
+      "prestige": 85,
+      "budget": 1500000,
+      "nil_budget": 800000
+    }
+  ]
+}

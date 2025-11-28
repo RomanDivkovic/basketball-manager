@@ -1,0 +1,22 @@
+{
+  "name": "example-mod",
+  "version": "1.0.0",
+  "game_version": "1.0.0-alpha",
+  "author": "Basketball Manager",
+  "description": "Example mod showing modding system capabilities",
+  
+  "enabled": true,
+  "priority": 50,
+  
+  "overrides": {
+    "teams": ["custom_teams"],
+    "players": ["custom_players"],
+    "rules": ["custom_rules"]
+  },
+  
+  "content": {
+    "teams": "data/teams.json",
+    "players": "data/players.json",
+    "schedule": "rules/schedule.lua"
+  }
+}
