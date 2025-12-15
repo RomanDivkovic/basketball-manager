@@ -63,3 +63,8 @@ Makefile
 # Documentation
 docs/_build/
 docs/.doctrees/
+
+
+# Istructions
+.github
+istruct.instructions.md
