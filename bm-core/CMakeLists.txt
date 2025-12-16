@@ -54,9 +54,9 @@ target_include_directories(BMCore PUBLIC
 
 # Link libraries
 target_link_libraries(BMCore PUBLIC
-    ${SQLITE3_LIBRARIES}
-    ${LUA_LIBRARY}
-)IES
+    SQLite::SQLite3
+    ${LUA_LIBRARIES}
+)
 
 # For macOS M1, set correct architecture
 if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
