@@ -1,4 +1,5 @@
 #include "engine/MatchEngine.h"
+#include "common/Types.h"
 #include <iostream>
 #include <cmath>
 #include <random>
