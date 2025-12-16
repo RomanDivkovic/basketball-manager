@@ -7,9 +7,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find required packages
 find_package(SQLite3 REQUIRED)
 
-# Lua dependency (will use Lua 5.4)
-set(LUA_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua/src")
-set(LUA_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua/liblua.a")
+# Find Lua (system installation via Homebrew or apt)
+find_package(Lua REQUIRED)
+if(NOT LUA_FOUND)
+    message(FATAL_ERROR "Lua not found. Install via: brew install lua (macOS) or apt-get install lua5.4 (Ubuntu)")
+endif()
 
 # Source files
 set(SOURCES
@@ -46,7 +48,6 @@ add_library(BMCore SHARED ${SOURCES} ${HEADERS})
 # Include directories
 target_include_directories(BMCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${SQLITE3_INCLUDE_DIRS}
     ${LUA_INCLUDE_DIR}
 )
@@ -55,7 +56,7 @@ target_include_directories(BMCore PUBLIC
 target_link_libraries(BMCore PUBLIC
     ${SQLITE3_LIBRARIES}
     ${LUA_LIBRARY}
-)
+)IES
 
 # For macOS M1, set correct architecture
 if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
