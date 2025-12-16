@@ -1,4 +1,6 @@
 #include "lua/LuaBindings.h"
+#include "engine/MatchEngine.h"
+#include "engine/SimulationManager.h"
 #include <lua.hpp>
 #include <iostream>
 
