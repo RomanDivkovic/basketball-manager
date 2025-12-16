@@ -19,6 +19,9 @@ target_link_libraries(bm-mod-validator PUBLIC
     sqlite3
 )
 
+# Player generator tool
+add_subdirectory(player-generator)
+
 # Set output directory
 set_target_properties(bm-data-importer bm-mod-validator PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
