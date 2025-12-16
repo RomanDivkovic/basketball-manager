@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/Types.h"
 #include <string>
 #include <vector>
 
@@ -7,7 +8,7 @@ namespace bm {
 namespace ai {
 
 struct Tactic;
-struct Team;
+using bm::Team;
 
 /**
  * TacticAI - Offensive and defensive play selection

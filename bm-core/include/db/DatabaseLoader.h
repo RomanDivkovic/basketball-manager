@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/Types.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,8 +9,8 @@ namespace bm {
 namespace db {
 
 class DatabaseManager;
-struct Team;
-struct Player;
+using bm::Team;
+using bm::Player;
 
 /**
  * DatabaseLoader - Loads game data from CSV, JSON, or SQLite

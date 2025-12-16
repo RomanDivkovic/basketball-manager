@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/Types.h"
 #include <memory>
 #include <vector>
 #include <string>
@@ -7,10 +8,10 @@
 namespace bm {
 namespace engine {
 
-// Forward declarations
-struct Team;
-struct Player;
-struct MatchState;
+// Use Team from bm namespace
+using bm::Team;
+using bm::Player;
+using bm::MatchState;
 
 /**
  * MatchEngine - Core basketball match simulation

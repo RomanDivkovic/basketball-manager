@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/Types.h"
 #include <memory>
 #include <vector>
 #include <map>
@@ -8,7 +9,7 @@ namespace bm {
 namespace engine {
 
 class MatchEngine;
-struct Team;
+using bm::Team;
 
 /**
  * SimulationManager - Manages overall game simulation

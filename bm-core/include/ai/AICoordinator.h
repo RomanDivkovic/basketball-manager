@@ -1,13 +1,14 @@
 #pragma once
 
+#include "common/Types.h"
 #include <memory>
 #include <vector>
 
 namespace bm {
 namespace ai {
 
-struct Team;
-struct Player;
+using bm::Team;
+using bm::Player;
 
 /**
  * AICoordinator - Main AI decision maker
