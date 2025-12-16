@@ -18,6 +18,7 @@ set(SOURCES
     src/main.cpp
     src/engine/MatchEngine.cpp
     src/engine/SimulationManager.cpp
+    src/engine/CourtVisualizer.cpp
     src/ai/AICoordinator.cpp
     src/ai/TacticAI.cpp
     src/db/DatabaseManager.cpp
@@ -33,6 +34,7 @@ set(SOURCES
 set(HEADERS
     include/engine/MatchEngine.h
     include/engine/SimulationManager.h
+    include/engine/CourtVisualizer.h
     include/ai/AICoordinator.h
     include/ai/TacticAI.h
     include/db/DatabaseManager.h
