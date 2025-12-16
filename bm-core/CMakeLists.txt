@@ -26,6 +26,7 @@ set(SOURCES
     src/lua/LuaBindings.cpp
     src/stats/StatisticsEngine.cpp
     src/bindings/UnityBridge.cpp
+    src/player/PlayerGenerator.cpp
 )
 
 # Header files
@@ -40,6 +41,7 @@ set(HEADERS
     include/lua/LuaBindings.h
     include/stats/StatisticsEngine.h
     include/bindings/UnityBridge.h
+    include/player/PlayerGenerator.h
 )
 
 # Create main library
