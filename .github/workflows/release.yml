@@ -1,0 +1,85 @@
+name: Release Build
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        default: 'v0.1.0'
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-macos-arm64:
+    name: Build macOS ARM64 Release
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        brew install cmake lua sqlite3
+        
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.x'
+        
+    - name: Build C++ Core
+      run: |
+        cd bm-core
+        cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_OSX_ARCHITECTURES=arm64
+        cmake --build build --config $BUILD_TYPE -j4
+        
+    - name: Build C# Importer
+      run: |
+        cd bm-tools/NCAAImporter
+        dotnet publish -c Release -o ../../dist/NCAAImporter
+        
+    - name: Package release
+      run: |
+        mkdir -p release/basketball-manager
+        
+        # Copy C++ libraries
+        cp -r bm-core/build/*.dylib release/basketball-manager/ 2>/dev/null || true
+        cp -r bm-core/include release/basketball-manager/ 2>/dev/null || true
+        
+        # Copy C# importer
+        cp -r dist/NCAAImporter release/basketball-manager/
+        
+        # Copy data files
+        mkdir -p release/basketball-manager/data
+        cp -r bm-data/ncaa-2025/*.lua release/basketball-manager/data/ 2>/dev/null || true
+        cp -r bm-data/schema release/basketball-manager/data/ 2>/dev/null || true
+        
+        # Copy documentation
+        cp README.md release/basketball-manager/
+        cp PHASE2_COMPLETE.md release/basketball-manager/ 2>/dev/null || true
+        cp docs/ARCHITECTURE.md release/basketball-manager/ 2>/dev/null || true
+        
+        # Create archive
+        cd release
+        tar -czf basketball-manager-macos-arm64.tar.gz basketball-manager/
+        
+    - name: Upload release artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: basketball-manager-macos-arm64
+        path: release/basketball-manager-macos-arm64.tar.gz
+        
+    - name: Upload to release
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: release/basketball-manager-macos-arm64.tar.gz
+        asset_name: basketball-manager-macos-arm64.tar.gz
+        asset_content_type: application/gzip
