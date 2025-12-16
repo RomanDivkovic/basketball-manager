@@ -22,6 +22,9 @@ target_link_libraries(bm-mod-validator PUBLIC
 # Player generator tool
 add_subdirectory(player-generator)
 
+# Match simulator tool
+add_subdirectory(match-simulator)
+
 # Set output directory
 set_target_properties(bm-data-importer bm-mod-validator PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
