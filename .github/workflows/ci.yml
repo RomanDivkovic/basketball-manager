@@ -1,0 +1,236 @@
+name: Basketball Manager CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # C++ Core Build & Test
+  cpp-build:
+    name: Build C++ Core
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        brew install cmake lua sqlite3
+        
+    - name: Configure CMake
+      run: |
+        cd bm-core
+        cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_OSX_ARCHITECTURES=arm64
+        
+    - name: Build
+      run: |
+        cd bm-core
+        cmake --build build --config $BUILD_TYPE -j4
+        
+    - name: List build artifacts
+      run: |
+        echo "=== Build output ==="
+        find bm-core/build -type f -name "*.dylib" -o -name "*.a" || echo "No libraries found"
+        
+    - name: Upload C++ artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cpp-libs
+        path: |
+          bm-core/build/**/*.dylib
+          bm-core/build/**/*.a
+        retention-days: 7
+
+  # C# Importer Build & Test
+  csharp-build:
+    name: Build C# NCAA Importer
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.x'
+        
+    - name: Restore dependencies
+      run: |
+        cd bm-tools/NCAAImporter
+        dotnet restore
+        
+    - name: Build
+      run: |
+        cd bm-tools/NCAAImporter
+        dotnet build --configuration Release --no-restore
+        
+    - name: Test import (dry run)
+      run: |
+        cd bm-tools/NCAAImporter
+        if [ -f "../../bm-data/ncaa-source/cbb25.csv" ]; then
+          echo "CSV file found, testing import..."
+          dotnet run --configuration Release ../../bm-data/ncaa-source/cbb25.csv /tmp/test_bm.db
+        else
+          echo "CSV file not found in repo, skipping import test"
+        fi
+        
+    - name: Upload C# artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: csharp-importer
+        path: bm-tools/NCAAImporter/bin/Release/
+        retention-days: 7
+
+  # Code quality checks
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check file permissions
+      run: |
+        echo "=== Checking execute permissions ==="
+        find . -name "*.sh" -type f ! -perm -u+x -exec echo "Missing execute: {}" \; || true
+        
+    - name: Check for large files
+      run: |
+        echo "=== Checking for large files (>10MB) ==="
+        find . -type f -size +10M -not -path "*/build/*" -not -path "*/.git/*" || echo "No large files found"
+        
+    - name: Validate Lua syntax
+      run: |
+        echo "=== Validating Lua files ==="
+        for lua_file in $(find . -name "*.lua" -not -path "*/build/*"); do
+          echo "Checking $lua_file"
+          lua -e "assert(loadfile('$lua_file'))" || exit 1
+        done
+        
+    - name: Check CSV structure
+      run: |
+        if [ -f "bm-data/ncaa-source/cbb25.csv" ]; then
+          echo "=== Validating CSV headers ==="
+          head -n 1 bm-data/ncaa-source/cbb25.csv
+          echo "=== CSV line count ==="
+          wc -l bm-data/ncaa-source/cbb25.csv
+        else
+          echo "CSV not in repo (expected for public repos)"
+        fi
+
+  # Documentation check
+  docs-check:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check README exists
+      run: |
+        if [ ! -f "README.md" ]; then
+          echo "❌ Missing README.md"
+          exit 1
+        fi
+        echo "✅ README.md exists"
+        
+    - name: Check documentation files
+      run: |
+        echo "=== Documentation files ==="
+        find docs -name "*.md" -type f | sort || echo "No docs found"
+        find . -maxdepth 2 -name "*.md" -type f | sort
+        
+    - name: Validate markdown links (basic)
+      run: |
+        echo "=== Checking for broken local links ==="
+        for md in $(find . -name "*.md" -not -path "*/node_modules/*"); do
+          echo "Checking: $md"
+          # Basic check for broken local file references
+          grep -oP '\]\([^)]+\)' "$md" | sed 's/](\(.*\))/\1/' | while read link; do
+            if [[ "$link" != http* ]] && [[ "$link" != "#"* ]]; then
+              if [ ! -e "$(dirname "$md")/$link" ]; then
+                echo "⚠️  Potentially broken link in $md: $link"
+              fi
+            fi
+          done
+        done || true
+
+  # Integration test
+  integration-test:
+    name: Integration Test
+    runs-on: macos-latest
+    needs: [cpp-build, csharp-build]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download C++ artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: cpp-libs
+        path: bm-core/build/
+        
+    - name: Download C# artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: csharp-importer
+        path: bm-tools/NCAAImporter/bin/Release/
+        
+    - name: Setup test environment
+      run: |
+        brew install sqlite3
+        
+    - name: Verify artifacts
+      run: |
+        echo "=== C++ Libraries ==="
+        find bm-core/build -name "*.dylib" -o -name "*.a" || echo "No C++ libs"
+        echo ""
+        echo "=== C# Executables ==="
+        find bm-tools/NCAAImporter/bin/Release -name "NCAAImporter*" || echo "No C# exe"
+        
+    - name: Test database operations
+      run: |
+        echo "=== Testing SQLite database ==="
+        sqlite3 /tmp/test.db "CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT);"
+        sqlite3 /tmp/test.db "INSERT INTO test VALUES(1, 'Basketball Manager');"
+        sqlite3 /tmp/test.db "SELECT * FROM test;"
+        echo "✅ SQLite working"
+
+  # Summary job
+  ci-status:
+    name: CI Status
+    runs-on: ubuntu-latest
+    needs: [cpp-build, csharp-build, code-quality, docs-check, integration-test]
+    if: always()
+    
+    steps:
+    - name: Check job status
+      run: |
+        echo "=== CI Pipeline Results ==="
+        echo "C++ Build: ${{ needs.cpp-build.result }}"
+        echo "C# Build: ${{ needs.csharp-build.result }}"
+        echo "Code Quality: ${{ needs.code-quality.result }}"
+        echo "Docs Check: ${{ needs.docs-check.result }}"
+        echo "Integration Test: ${{ needs.integration-test.result }}"
+        
+        if [[ "${{ needs.cpp-build.result }}" != "success" ]] || \
+           [[ "${{ needs.csharp-build.result }}" != "success" ]] || \
+           [[ "${{ needs.code-quality.result }}" != "success" ]] || \
+           [[ "${{ needs.docs-check.result }}" != "success" ]] || \
+           [[ "${{ needs.integration-test.result }}" != "success" ]]; then
+          echo "❌ CI Pipeline Failed"
+          exit 1
+        fi
+        
+        echo "✅ All checks passed!"

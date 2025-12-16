@@ -1,5 +1,9 @@
 # 🏀 Basketball Manager
 
+[![CI Status](https://github.com/RomanDivkovic/basketball-manager/workflows/Basketball%20Manager%20CI/badge.svg)](https://github.com/RomanDivkovic/basketball-manager/actions)
+[![Release](https://github.com/RomanDivkovic/basketball-manager/workflows/Release%20Build/badge.svg)](https://github.com/RomanDivkovic/basketball-manager/releases)
+[![License](https://img.shields.io/github/license/RomanDivkovic/basketball-manager)](LICENSE)
+
 **The world's first Football Manager-level basketball management simulation**
 
 A deep, realistic basketball management game featuring NCAA Division I, with complete mod support and procedural player generation.

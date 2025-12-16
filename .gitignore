@@ -64,7 +64,6 @@ Makefile
 docs/_build/
 docs/.doctrees/
 
-
-# Istructions
-.github
+# Instructions (custom prompts - keep private)
+.github/instructions/
 istruct.instructions.md
