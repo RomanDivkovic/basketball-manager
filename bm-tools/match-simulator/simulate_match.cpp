@@ -27,8 +27,11 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         teamId = sqlite3_column_int(stmt, 0);
         team->teamId = std::to_string(teamId);
-        team->name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        team->conferenceId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        // Make copies of strings from sqlite3
+        const char* namePtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const char* confPtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        team->name = namePtr ? std::string(namePtr) : "";
+        team->conferenceId = confPtr ? std::string(confPtr) : "";
         team->prestige = sqlite3_column_int(stmt, 3);
         team->city = "";
         team->state = "";
@@ -61,11 +64,18 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
     while (sqlite3_step(rosterStmt) == SQLITE_ROW) {
         auto player = std::make_shared<Player>();
         
-        player->playerId = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 0));
-        player->firstName = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 1));
-        player->lastName = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 2));
+        // Make copies of all string pointers
+        const char* pidPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 0));
+        const char* fnPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 1));
+        const char* lnPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 2));
+        const char* posPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 3));
+        const char* bdPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 8));
         
-        std::string posStr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 3));
+        player->playerId = pidPtr ? std::string(pidPtr) : "";
+        player->firstName = fnPtr ? std::string(fnPtr) : "";
+        player->lastName = lnPtr ? std::string(lnPtr) : "";
+        
+        std::string posStr = posPtr ? std::string(posPtr) : "";
         if (posStr == "PG") player->position = Position::PG;
         else if (posStr == "SG") player->position = Position::SG;
         else if (posStr == "SF") player->position = Position::SF;
@@ -76,7 +86,7 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
         player->height = sqlite3_column_double(rosterStmt, 5);
         player->weight = sqlite3_column_double(rosterStmt, 6);
         player->jerseyNumber = sqlite3_column_int(rosterStmt, 7);
-        player->birthDate = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 8));
+        player->birthDate = bdPtr ? std::string(bdPtr) : "";
         
         player->attributes.pace = sqlite3_column_int(rosterStmt, 9);
         player->attributes.shooting = sqlite3_column_int(rosterStmt, 10);
@@ -93,6 +103,14 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
         player->international = sqlite3_column_int(rosterStmt, 20) != 0;
         player->draftEligible = sqlite3_column_int(rosterStmt, 21) != 0;
         player->nilValue = sqlite3_column_int(rosterStmt, 22);
+        
+        player->onCourt = false;
+        player->minutesPlayedThisGame = 0;
+        player->fatigueLevel = 0.0f;
+        player->pointsThisGame = 0;
+        player->reboundsThisGame = 0;
+        player->assistsThisGame = 0;
+        player->foulsThisGame = 0;
         
         team->roster.push_back(player);
         playerCount++;
@@ -122,8 +140,28 @@ int main(int argc, char* argv[]) {
         dbPath = argv[3];
     }
     
+    int speedMultiplier = 1;
+    if (argc >= 5) {
+        speedMultiplier = std::stoi(argv[4]);
+        if (speedMultiplier != 1 && speedMultiplier != 2 && speedMultiplier != 3 && 
+            speedMultiplier != 4 && speedMultiplier != 6) {
+            std::cerr << "Invalid speed multiplier. Must be 1, 2, 3, 4, or 6\n";
+            speedMultiplier = 1;
+        }
+    }
+    
+    bool interactiveMode = false;
+    if (argc >= 6) {
+        std::string mode = argv[5];
+        if (mode == "interactive" || mode == "i") {
+            interactiveMode = true;
+        }
+    }
+    
     std::cout << "Database: " << dbPath << "\n";
-    std::cout << "Match: " << homeTeamName << " vs " << awayTeamName << "\n\n";
+    std::cout << "Match: " << homeTeamName << " vs " << awayTeamName << "\n";
+    std::cout << "Speed: " << speedMultiplier << "x\n";
+    std::cout << "Mode: " << (interactiveMode ? "INTERACTIVE (pause/timeout enabled)" : "Auto-play") << "\n\n";
     
     // Open database
     db::DatabaseManager db;
@@ -138,8 +176,9 @@ int main(int argc, char* argv[]) {
     
     if (!homeTeam || !awayTeam) {
         std::cerr << "\nFailed to load teams!\n";
-        std::cerr << "Usage: " << argv[0] << " <home_team> <away_team> [db_path]\n";
-        std::cerr << "Example: " << argv[0] << " Duke \"North Carolina\"\n";
+        std::cerr << "Usage: " << argv[0] << " <home_team> <away_team> [db_path] [speed_multiplier]\n";
+        std::cerr << "Example: " << argv[0] << " Duke \"North Carolina\" ../bm-data/basketball_manager.db 2\n";
+        std::cerr << "Speed multiplier: 1 (real-time), 2, 3, 4, 6 (6x fastest)\n";
         return 1;
     }
     
@@ -147,7 +186,19 @@ int main(int argc, char* argv[]) {
     
     // Create match engine
     MatchEngine engine;
+    engine.SetSimulationSpeed(static_cast<bm::engine::SimulationSpeed>(speedMultiplier));
+    engine.SetPauseEnabled(interactiveMode);
     engine.InitializeMatch(homeTeam, awayTeam);
+    
+    if (interactiveMode) {
+        std::cout << "\n╔════════════════════════════════════════════════════════════════╗\n";
+        std::cout << "║                    INTERACTIVE MODE ENABLED                    ║\n";
+        std::cout << "╠════════════════════════════════════════════════════════════════╣\n";
+        std::cout << "║  • Press 'p' + ENTER to pause during play                     ║\n";
+        std::cout << "║  • Call timeouts, make substitutions, change speed            ║\n";
+        std::cout << "║  • View live stats and control game flow                      ║\n";
+        std::cout << "╚════════════════════════════════════════════════════════════════╝\n\n";
+    }
     
     // Simulate match
     engine.SimulateFullMatch();

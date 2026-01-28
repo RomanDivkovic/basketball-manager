@@ -17,6 +17,7 @@ endif()
 set(SOURCES
     src/main.cpp
     src/engine/MatchEngine.cpp
+    src/engine/TacticalManager.cpp
     src/engine/SimulationManager.cpp
     src/engine/CourtVisualizer.cpp
     src/ai/AICoordinator.cpp
@@ -33,6 +34,7 @@ set(SOURCES
 # Header files
 set(HEADERS
     include/engine/MatchEngine.h
+    include/engine/TacticalManager.h
     include/engine/SimulationManager.h
     include/engine/CourtVisualizer.h
     include/ai/AICoordinator.h
