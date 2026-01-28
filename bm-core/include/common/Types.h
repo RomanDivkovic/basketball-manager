@@ -63,6 +63,15 @@ struct Player {
     float pointsPerGame;
     float reboundsPerGame;
     float assistsPerGame;
+    
+    // Match state (in-game tracking)
+    bool onCourt;           // Currently playing
+    float minutesPlayedThisGame;  // Accumulated minutes this match
+    float fatigueLevel;     // 0.0 (fresh) to 1.0 (exhausted)
+    int pointsThisGame;
+    int reboundsThisGame;
+    int assistsThisGame;
+    int foulsThisGame;
 };
 
 // Team structure
@@ -92,8 +101,9 @@ struct MatchState {
     int homeScore;
     int awayScore;
     
-    int quarterNumber;
-    int timeRemaining;  // In seconds
+    int quarterNumber;      // 1-4, or 5+ for OT
+    int timeRemaining;      // In seconds (600 per quarter = 10 min for testing, 720 for real)
+    int timeElapsed;        // Total elapsed time in seconds
     
     int homeRebounds;
     int awayRebounds;
@@ -101,10 +111,20 @@ struct MatchState {
     int homeFouls;
     int awayFouls;
     
+    // Possession tracking
+    bool homeTeamPossession;
+    bool jumpBallWinner;    // true = home team won Q1 tip-off
+    int possessionCount;
+    
     std::shared_ptr<Player> lastScorer;
+    std::shared_ptr<Player> lastRebounder;
     std::string lastPlay;
     
     bool matchComplete;
+    
+    // Starting lineups
+    std::vector<std::shared_ptr<Player>> homeStartingFive;
+    std::vector<std::shared_ptr<Player>> awayStartingFive;
 };
 
 // Tactic configuration
