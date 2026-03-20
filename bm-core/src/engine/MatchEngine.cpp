@@ -37,7 +37,10 @@ static int RandomInt(int min, int max) {
 }
 
 MatchEngine::MatchEngine() : matchState(nullptr), speedMultiplier(1), pauseEnabled(false), 
-                             homeTimeoutsRemaining(3), awayTimeoutsRemaining(3) {
+                             homeTimeoutsRemaining(3), awayTimeoutsRemaining(3),
+                             homeCoachingMomentum(0), awayCoachingMomentum(0),
+                             homeLastCallout(CoachingCallout::KEEP_GOING), 
+                             awayLastCallout(CoachingCallout::KEEP_GOING) {
     std::cout << "[MatchEngine] Initialized\n";
     tacticalManager = std::make_shared<TacticalManager>();
 }
@@ -676,7 +679,8 @@ void MatchEngine::HandlePauseMenu() {
                   << " | Away: " << awayTimeoutsRemaining << ")                              ║\n";
         std::cout << "║  4. Make Substitution                                          ║\n";
         std::cout << "║  5. Show Player Stats                                          ║\n";
-        std::cout << "║  6. Quit Game                                                  ║\n";
+        std::cout << "║  6. Coach Callout (More Offense/Defense/Manage Time)           ║\n";
+        std::cout << "║  7. Quit Game                                                  ║\n";
         std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
         std::cout << "Enter choice: ";
         
@@ -813,8 +817,54 @@ void MatchEngine::HandlePauseMenu() {
                 std::cout << "  (* = currently on court)\n";
                 break;
             }
+            
+            case 6: {
+                std::cout << "\nCoach callout for: (1) " << matchState->homeTeam->name 
+                          << " or (2) " << matchState->awayTeam->name << ": ";
+                int teamChoice;
+                std::cin >> teamChoice;
+                std::cin.ignore(1000, '\n');
                 
-            case 6:
+                if (teamChoice != 1 && teamChoice != 2) {
+                    std::cout << "[Invalid choice]\n";
+                    break;
+                }
+                
+                bool isHome = (teamChoice == 1);
+                std::string teamName = isHome ? matchState->homeTeam->name : matchState->awayTeam->name;
+                
+                std::cout << "\n╔════════════════════════════════════════════════════════════════╗\n";
+                std::cout << "║  " << std::left << std::setw(60) << ("Coach - " + teamName) << "  ║\n";
+                std::cout << "╠════════════════════════════════════════════════════════════════╣\n";
+                std::cout << "║  1. Ask team to be MORE OFFENSIVE                             ║\n";
+                std::cout << "║  2. Ask team to be MORE DEFENSIVE                             ║\n";
+                std::cout << "║  3. Ask team to MANAGE TIME (slow down pace)                 ║\n";
+                std::cout << "║  4. Ask team to KEEP GOING (maintain strategy)               ║\n";
+                std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
+                std::cout << "Enter callout choice: ";
+                
+                int calloutChoice;
+                std::cin >> calloutChoice;
+                std::cin.ignore(1000, '\n');
+                
+                CoachingCallout callout;
+                switch (calloutChoice) {
+                    case 1: callout = CoachingCallout::MORE_OFFENSIVE; break;
+                    case 2: callout = CoachingCallout::MORE_DEFENSIVE; break;
+                    case 3: callout = CoachingCallout::MANAGE_TIME; break;
+                    case 4: callout = CoachingCallout::KEEP_GOING; break;
+                    default:
+                        std::cout << "[Invalid callout choice]\n";
+                        break;
+                }
+                
+                if (calloutChoice >= 1 && calloutChoice <= 4) {
+                    ApplyCoachingCallout(isHome, callout);
+                }
+                break;
+            }
+                
+            case 7:
                 std::cout << "\n[QUITTING GAME...]\n";
                 matchState->matchComplete = true;
                 matchState->timeRemaining = 0;
@@ -916,6 +966,81 @@ void MatchEngine::CallTimeout(bool isHomeTeam) {
     
     std::cout << "\n[Timeout complete - Resuming play...]\n\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(500 / speedMultiplier));
+}
+
+void MatchEngine::ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout) {
+    if (!matchState) return;
+    
+    auto team = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+    std::string teamName = team->name;
+    std::string calloutText;
+    
+    // Display coaching callout message
+    std::cout << "\n╔════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                    🏀 COACHING CALLOUT 🏀                      ║\n";
+    std::cout << "╠════════════════════════════════════════════════════════════════╣\n";
+    
+    // Set momentum duration and apply tactical changes
+    if (isHomeTeam) {
+        homeCoachingMomentum = COACHING_MOMENTUM_DURATION;
+        homeLastCallout = callout;
+    } else {
+        awayCoachingMomentum = COACHING_MOMENTUM_DURATION;
+        awayLastCallout = callout;
+    }
+    
+    auto offenseStrategy = isHomeTeam ? tacticalManager->GetHomeOffensiveStrategy() 
+                                       : tacticalManager->GetAwayOffensiveStrategy();
+    auto defenseStrategy = isHomeTeam ? tacticalManager->GetHomeDefensiveStrategy() 
+                                       : tacticalManager->GetAwayDefensiveStrategy();
+    
+    switch (callout) {
+        case CoachingCallout::MORE_OFFENSIVE:
+            calloutText = "Asking team to play more OFFENSIVELY!";
+            if (isHomeTeam) {
+                tacticalManager->SetHomeOffensiveStrategy(OffensiveStrategy::THREE_POINT_HEAVY);
+                tacticalManager->SetHomeDefensiveStrategy(DefensiveStrategy::BALANCED_DEFENSE);
+            } else {
+                tacticalManager->SetAwayOffensiveStrategy(OffensiveStrategy::THREE_POINT_HEAVY);
+                tacticalManager->SetAwayDefensiveStrategy(DefensiveStrategy::BALANCED_DEFENSE);
+            }
+            break;
+            
+        case CoachingCallout::MORE_DEFENSIVE:
+            calloutText = "Asking team to focus on DEFENSE!";
+            if (isHomeTeam) {
+                tacticalManager->SetHomeOffensiveStrategy(OffensiveStrategy::BALANCED);
+                tacticalManager->SetHomeDefensiveStrategy(DefensiveStrategy::PRESS);
+            } else {
+                tacticalManager->SetAwayOffensiveStrategy(OffensiveStrategy::BALANCED);
+                tacticalManager->SetAwayDefensiveStrategy(DefensiveStrategy::PRESS);
+            }
+            break;
+            
+        case CoachingCallout::MANAGE_TIME:
+            calloutText = "Asking team to MANAGE THE CLOCK!";
+            if (isHomeTeam) {
+                tacticalManager->SetHomeOffensiveStrategy(OffensiveStrategy::INSIDE_FOCUSED);
+                tacticalManager->SetHomeDefensiveStrategy(DefensiveStrategy::ZONE_2_3);
+            } else {
+                tacticalManager->SetAwayOffensiveStrategy(OffensiveStrategy::INSIDE_FOCUSED);
+                tacticalManager->SetAwayDefensiveStrategy(DefensiveStrategy::ZONE_2_3);
+            }
+            break;
+            
+        case CoachingCallout::KEEP_GOING:
+            calloutText = "Reminding team to KEEP GOING and STAY FOCUSED!";
+            // Keep current strategies, just give morale boost
+            break;
+    }
+    
+    std::cout << "║  " << std::left << std::setw(60) << (teamName + " - " + calloutText) << "  ║\n";
+    std::cout << "║  " << std::left << std::setw(60) 
+              << ("Effect duration: " + std::to_string(COACHING_MOMENTUM_DURATION) + " possessions") 
+              << "  ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000 / speedMultiplier));
 }
 
 } // namespace engine

@@ -18,6 +18,7 @@ set(SOURCES
     src/main.cpp
     src/engine/MatchEngine.cpp
     src/engine/TacticalManager.cpp
+    src/engine/SeasonManager.cpp
     src/engine/SimulationManager.cpp
     src/engine/CourtVisualizer.cpp
     src/ai/AICoordinator.cpp
@@ -35,6 +36,7 @@ set(SOURCES
 set(HEADERS
     include/engine/MatchEngine.h
     include/engine/TacticalManager.h
+    include/engine/SeasonManager.h
     include/engine/SimulationManager.h
     include/engine/CourtVisualizer.h
     include/ai/AICoordinator.h

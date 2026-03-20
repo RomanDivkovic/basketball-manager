@@ -24,10 +24,9 @@ NBA_DATA = {
         "prestige": 19,
         "players": [
             {"name": "LeBron James", "pos": "SF", "height": 2.06, "weight": 113, "shooting": 16, "defense": 15},
-            {"name": "Anthony Davis", "pos": "C", "height": 2.11, "weight": 115, "shooting": 15, "defense": 18},
+            {"name": "DeAndrea Ayton", "pos": "C", "height": 2.17, "weight": 125, "shooting": 15, "defense": 18},
             {"name": "Austin Reaves", "pos": "SG", "height": 1.96, "weight": 90, "shooting": 14, "defense": 13},
-            {"name": "Luka Doncic", "pos": "SG", "height": 2.00, "weight": 104, "shooting": 19, "defense": 12},
-            {"name": "Kyrie Irving", "pos": "PG", "height": 1.88, "weight": 88, "shooting": 18, "defense": 11},
+            {"name": "Luka Doncic", "pos": "SG", "height": 2.00, "weight": 104, "shooting": 20, "defense": 12},
             {"name": "Maxi Kleber", "pos": "PF", "height": 2.10, "weight": 109, "shooting": 12, "defense": 15},
         ]
     },
@@ -89,7 +88,7 @@ NBA_DATA = {
             {"name": "Kyrie Irving", "pos": "PG", "height": 1.88, "weight": 88, "shooting": 18, "defense": 11},
             {"name": "Derrick Jones Jr", "pos": "SF", "height": 1.98, "weight": 99, "shooting": 13, "defense": 16},
             {"name": "Anthony Davis", "pos": "C", "height": 2.11, "weight": 115, "shooting": 15, "defense": 18},
-             {"name": "Klay Thompson", "pos": "SG", "height": 2.01, "weight": 98, "shooting": 19, "defense": 13},
+            {"name": "Klay Thompson", "pos": "SG", "height": 2.01, "weight": 98, "shooting": 19, "defense": 13},
             {"name": "D'Angelo Russell", "pos": "PG", "height": 1.93, "weight": 86, "shooting": 15, "defense": 12},
         ]
     },

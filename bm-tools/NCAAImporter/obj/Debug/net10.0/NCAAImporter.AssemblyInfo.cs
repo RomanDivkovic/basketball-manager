@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NCAAImporter")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e529404961bc42aa1d227ad97c718a896c99a649")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bd872cf9061014cf09b764f98f06fb7578ffcd87")]
 [assembly: System.Reflection.AssemblyProductAttribute("NCAAImporter")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NCAAImporter")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
