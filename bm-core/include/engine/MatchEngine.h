@@ -30,7 +30,16 @@ enum class PauseMenuOption {
     TIMEOUT,
     SUBSTITUTE,
     SHOW_STATS,
+    COACH_CALLOUT,
     QUIT
+};
+
+// Coaching callout options - commands the coach can issue during games
+enum class CoachingCallout {
+    MORE_OFFENSIVE,    // Ask team to play more aggressively offensively
+    MORE_DEFENSIVE,    // Ask team to focus on defense
+    MANAGE_TIME,       // Ask team to slow down and manage the clock
+    KEEP_GOING         // Ask team to maintain current strategy
 };
 
 /**
@@ -81,6 +90,9 @@ public:
     // Call timeout for current possession team (30 seconds)
     void CallTimeout(bool isHomeTeam);
 
+    // Apply coaching callout to a team
+    void ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout);
+
     // Get remaining timeouts for a team
     int GetTimeoutsRemaining(bool isHomeTeam) const { 
         return isHomeTeam ? homeTimeoutsRemaining : awayTimeoutsRemaining; 
@@ -99,6 +111,13 @@ private:
     bool pauseEnabled;                  // Enable interactive pause
     int homeTimeoutsRemaining;          // Timeouts remaining for home team (3 per half)
     int awayTimeoutsRemaining;          // Timeouts remaining for away team (3 per half)
+
+    // Coaching momentum tracking
+    int homeCoachingMomentum;           // Possessions remaining for home team coaching effect
+    int awayCoachingMomentum;           // Possessions remaining for away team coaching effect
+    CoachingCallout homeLastCallout;    // Last callout issued to home team
+    CoachingCallout awayLastCallout;    // Last callout issued to away team
+    static constexpr int COACHING_MOMENTUM_DURATION = 8; // Possessions a callout affects play
 
     // Internal simulation methods
     void PlaySelection();
