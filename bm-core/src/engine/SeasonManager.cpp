@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <iomanip>
 #include <random>
+#include <map>
+#include <utility>
+#include <numeric>
+#include <cmath>
 
 namespace bm {
 namespace engine {
@@ -55,18 +59,68 @@ void SeasonManager::GenerateSchedule() {
 }
 
 void SeasonManager::GenerateNBASchedule() {
-    // NBA: 82 games per team
-    // Simple round-robin: each team plays every other team multiple times
-    // For 30 teams: play each team ~2-3 times (82 games total per team)
-    
-    int gamesPerMatchup = 3; // Each pair plays 3 times
-    
-    for (size_t i = 0; i < allTeams.size(); ++i) {
-        for (size_t j = i + 1; j < allTeams.size(); ++j) {
-            for (int game = 0; game < gamesPerMatchup; ++game) {
+    schedule.clear();
+    fixtureDays.clear();
+
+    const int targetGamesPerTeam = 82;
+    const int totalTeams = static_cast<int>(allTeams.size());
+    if (totalTeams < 2) {
+        return;
+    }
+
+    std::vector<int> gamesRemaining(totalTeams, targetGamesPerTeam);
+    std::vector<std::pair<int, int>> allPairs;
+    for (int i = 0; i < totalTeams; ++i) {
+        for (int j = i + 1; j < totalTeams; ++j) {
+            allPairs.emplace_back(i, j);
+        }
+    }
+
+    std::map<std::pair<int, int>, int> pairCounts;
+    for (const auto& pair : allPairs) {
+        pairCounts[pair] = 2;
+        gamesRemaining[pair.first] -= 2;
+        gamesRemaining[pair.second] -= 2;
+    }
+
+    for (const auto& pair : allPairs) {
+        int i = pair.first;
+        int j = pair.second;
+        while (gamesRemaining[i] > 0 && gamesRemaining[j] > 0 && pairCounts[pair] < 4) {
+            Game g;
+            if (pairCounts[pair] % 2 == 0) {
+                g.homeTeam = allTeams[i];
+                g.awayTeam = allTeams[j];
+            } else {
+                g.homeTeam = allTeams[j];
+                g.awayTeam = allTeams[i];
+            }
+            schedule.push_back(g);
+            pairCounts[pair]++;
+            gamesRemaining[i]--;
+            gamesRemaining[j]--;
+        }
+    }
+
+    // Fill remaining games while keeping every team at 82 games exactly.
+    while (true) {
+        bool done = true;
+        for (int t = 0; t < totalTeams; ++t) {
+            if (gamesRemaining[t] > 0) {
+                done = false;
+                break;
+            }
+        }
+        if (done) break;
+
+        for (int i = 0; i < totalTeams; ++i) {
+            if (gamesRemaining[i] <= 0) continue;
+            for (int j = i + 1; j < totalTeams; ++j) {
+                if (gamesRemaining[j] <= 0) continue;
+                if (pairCounts[{i, j}] >= 4) continue;
+
                 Game g;
-                // Alternate home/away
-                if (game % 2 == 0) {
+                if ((pairCounts[{i, j}] + 1) % 2 == 0) {
                     g.homeTeam = allTeams[i];
                     g.awayTeam = allTeams[j];
                 } else {
@@ -74,28 +128,33 @@ void SeasonManager::GenerateNBASchedule() {
                     g.awayTeam = allTeams[i];
                 }
                 schedule.push_back(g);
+                pairCounts[{i, j}]++;
+                gamesRemaining[i]--;
+                gamesRemaining[j]--;
+
+                if (gamesRemaining[i] <= 0 && gamesRemaining[j] <= 0) {
+                    break;
+                }
             }
         }
     }
-    
-    // Shuffle schedule for realistic ordering
-    std::random_device rd;
-    std::mt19937 gen(rd());
+
+    std::mt19937 gen(static_cast<unsigned int>(std::random_device{}()));
     std::shuffle(schedule.begin(), schedule.end(), gen);
+    totalGames = static_cast<int>(schedule.size());
+    BuildFixtureDays();
 }
 
 void SeasonManager::GenerateNCAASchedule() {
-    // NCAA: ~30 games per team (conference play focused)
-    // Simpler schedule: play each team 1-2 times
-    
+    schedule.clear();
+    fixtureDays.clear();
+
     int gamesPerMatchup = 2;
-    
     for (size_t i = 0; i < allTeams.size(); ++i) {
         for (size_t j = i + 1; j < allTeams.size(); ++j) {
-            // Check if same conference (play more often)
             bool sameConference = (allTeams[i]->conferenceId == allTeams[j]->conferenceId);
             int games = sameConference ? gamesPerMatchup : 1;
-            
+
             for (int game = 0; game < games; ++game) {
                 Game g;
                 if (game % 2 == 0) {
@@ -109,11 +168,85 @@ void SeasonManager::GenerateNCAASchedule() {
             }
         }
     }
-    
-    // Shuffle
+
     std::random_device rd;
     std::mt19937 gen(rd());
     std::shuffle(schedule.begin(), schedule.end(), gen);
+    totalGames = static_cast<int>(schedule.size());
+    BuildFixtureDays();
+}
+
+void SeasonManager::BuildFixtureDays() {
+    fixtureDays.clear();
+    if (schedule.empty()) {
+        return;
+    }
+
+    const int dayCount = std::max(30, static_cast<int>(std::ceil(static_cast<float>(schedule.size()) / 8.0f)));
+    fixtureDays.resize(dayCount);
+
+    for (int dayIndex = 0; dayIndex < dayCount; ++dayIndex) {
+        fixtureDays[dayIndex].dayNumber = dayIndex + 1;
+        fixtureDays[dayIndex].label = "Day " + std::to_string(dayIndex + 1);
+        fixtureDays[dayIndex].simulated = false;
+    }
+
+    for (size_t gameIndex = 0; gameIndex < schedule.size(); ++gameIndex) {
+        int dayIndex = static_cast<int>(gameIndex % dayCount);
+        fixtureDays[dayIndex].games.push_back(schedule[gameIndex]);
+    }
+}
+
+std::vector<SeasonManager::Game> SeasonManager::GetFixturesForDay(int dayNumber) const {
+    const int index = std::max(0, dayNumber - 1);
+    if (index >= static_cast<int>(fixtureDays.size())) {
+        return {};
+    }
+    return fixtureDays[index].games;
+}
+
+bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const std::shared_ptr<Team>& managedTeam) {
+    if (dayNumber < 1 || dayNumber > static_cast<int>(fixtureDays.size())) {
+        return false;
+    }
+
+    auto& day = fixtureDays[dayNumber - 1];
+    if (day.simulated) {
+        return false;
+    }
+
+    std::cout << "\n===== " << day.label << " =====\n";
+    for (auto& game : day.games) {
+        if (game.played) {
+            continue;
+        }
+
+        bool isManagedGame = false;
+        if (managedTeam && (game.homeTeam == managedTeam || game.awayTeam == managedTeam)) {
+            isManagedGame = true;
+        }
+
+        if (isManagedGame && !autoSimComputerGames) {
+            std::cout << "Your team has a game today: " << game.homeTeam->name << " vs " << game.awayTeam->name << "\n";
+        }
+
+        matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
+        matchEngine->SimulateFullMatch();
+
+        auto state = matchEngine->GetMatchState();
+        game.homeScore = state->homeScore;
+        game.awayScore = state->awayScore;
+        game.played = true;
+        UpdateStandings(game);
+
+        gamesPlayed++;
+        std::cout << "[Day " << dayNumber << "] " << game.homeTeam->name << " " << game.homeScore
+                  << " - " << game.awayScore << " " << game.awayTeam->name << "\n";
+    }
+
+    day.simulated = true;
+    CalculateWinPercentages();
+    return true;
 }
 
 void SeasonManager::SimulateFullSeason(int speedMultiplier) {

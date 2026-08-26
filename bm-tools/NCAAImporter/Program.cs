@@ -97,6 +97,38 @@ class Program
 
         var command = connection.CreateCommand();
         command.CommandText = @"
+            CREATE TABLE IF NOT EXISTS players (
+                player_id TEXT PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                team_id INTEGER,
+                position TEXT NOT NULL,
+                year_in_school INTEGER,
+                height REAL,
+                weight REAL,
+                jersey_number INTEGER,
+                birth_date TEXT,
+                pace INTEGER,
+                shooting INTEGER,
+                ball_control INTEGER,
+                defense INTEGER,
+                physical INTEGER,
+                technical INTEGER,
+                current_ability INTEGER,
+                potential_ability INTEGER,
+                active INTEGER DEFAULT 1,
+                injured INTEGER DEFAULT 0,
+                suspension_matches INTEGER DEFAULT 0,
+                international INTEGER DEFAULT 0,
+                draft_eligible INTEGER DEFAULT 0,
+                nil_value INTEGER DEFAULT 0,
+                games_played REAL DEFAULT 0,
+                minutes_played REAL DEFAULT 0,
+                points_per_game REAL DEFAULT 0,
+                rebounds_per_game REAL DEFAULT 0,
+                assists_per_game REAL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS teams (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -107,11 +139,13 @@ class Program
                 defense INTEGER DEFAULT 10,
                 rebounding INTEGER DEFAULT 10,
                 ball_handling INTEGER DEFAULT 10,
+                active INTEGER DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE INDEX IF NOT EXISTS idx_teams_conference ON teams(conference);
             CREATE INDEX IF NOT EXISTS idx_teams_name ON teams(name);
+            CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id);
         ";
         command.ExecuteNonQuery();
 
