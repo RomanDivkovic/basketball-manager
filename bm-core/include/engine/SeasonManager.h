@@ -21,12 +21,36 @@ public:
     SeasonManager();
     ~SeasonManager();
 
+    struct Game {
+        std::shared_ptr<Team> homeTeam;
+        std::shared_ptr<Team> awayTeam;
+        int homeScore;
+        int awayScore;
+        bool played;
+
+        Game() : homeScore(0), awayScore(0), played(false) {}
+    };
+
+    struct FixtureDay {
+        int dayNumber;
+        std::string label;
+        std::vector<Game> games;
+        bool simulated;
+
+        FixtureDay() : dayNumber(0), simulated(false) {}
+    };
+
     // Season setup
     void InitializeSeason(int year, const std::string& leagueType); // "NBA" or "NCAA"
     void LoadTeams(const std::vector<std::shared_ptr<Team>>& teams);
     
     // Schedule generation
     void GenerateSchedule();
+    void GenerateNBASchedule();
+    void GenerateNCAASchedule();
+    std::vector<Game> GetFixturesForDay(int dayNumber) const;
+    int GetFixtureDayCount() const { return static_cast<int>(fixtureDays.size()); }
+    bool SimulateDay(int dayNumber, bool autoSimComputerGames = true, const std::shared_ptr<Team>& managedTeam = nullptr);
     
     // Season simulation
     void SimulateFullSeason(int speedMultiplier = 6);
@@ -70,30 +94,19 @@ public:
     bool ArePlayoffsComplete() const { return playoffsComplete; }
     
 private:
-    struct Game {
-        std::shared_ptr<Team> homeTeam;
-        std::shared_ptr<Team> awayTeam;
-        int homeScore;
-        int awayScore;
-        bool played;
-        
-        Game() : homeScore(0), awayScore(0), played(false) {}
-    };
-    
     std::shared_ptr<MatchEngine> matchEngine;
     std::vector<std::shared_ptr<Team>> allTeams;
     std::map<std::string, TeamRecord> standings;
     std::vector<Game> schedule;
-    
+    std::vector<FixtureDay> fixtureDays;
+
     int seasonYear;
     std::string leagueType;
     int gamesPlayed;
     int totalGames;
     bool playoffsComplete;
-    
-    // Schedule generation helpers
-    void GenerateNBASchedule();  // 82 games per team
-    void GenerateNCAASchedule(); // 30 games per team
+
+    void BuildFixtureDays();
     
     // Standings helpers
     void UpdateStandings(const Game& game);

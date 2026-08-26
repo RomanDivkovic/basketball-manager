@@ -328,18 +328,45 @@ int main(int argc, char* argv[]) {
         std::cout << "\nStarting 2025 NCAA Season!\n";
         std::cout << "Total games to play: " << season.GetTotalGames() << "\n\n";
         
-        // Play games until complete
+        // Simulate by day, so the full schedule advances for all teams and the user can stop when needed.
+        int currentDay = 1;
         bool continueSeason = true;
-        while (continueSeason && season.GetGamesPlayed() < season.GetTotalGames()) {
-            season.SimulateNextGame();
-            
-            std::cout << "\n\nContinue to next game? (y/n): ";
-            std::string response;
-            std::getline(std::cin, response);
-            
-            if (response != "y" && response != "Y") {
-                continueSeason = false;
+        while (continueSeason && currentDay <= season.GetFixtureDayCount()) {
+            std::cout << "\n========================================\n";
+            std::cout << "SEASON DAY " << currentDay << " / " << season.GetFixtureDayCount() << "\n";
+            std::cout << "========================================\n";
+
+            auto dailyGames = season.GetFixturesForDay(currentDay);
+            bool userTeamGameToday = false;
+            for (const auto& game : dailyGames) {
+                if (game.homeTeam == managedTeam || game.awayTeam == managedTeam) {
+                    userTeamGameToday = true;
+                    break;
+                }
             }
+
+            if (userTeamGameToday) {
+                std::cout << "Urgent: your team has a game today.\n";
+                std::cout << "Play it now? (y = simulate this day / n = stop season): ";
+                std::string choice;
+                std::getline(std::cin, choice);
+                if (choice != "y" && choice != "Y") {
+                    continueSeason = false;
+                    break;
+                }
+            } else {
+                std::cout << "No urgent game for your team today.\n";
+                std::cout << "Advance to next day? (y = simulate this day / n = stop): ";
+                std::string choice;
+                std::getline(std::cin, choice);
+                if (choice != "y" && choice != "Y") {
+                    continueSeason = false;
+                    break;
+                }
+            }
+
+            season.SimulateDay(currentDay, true, managedTeam);
+            currentDay++;
         }
         
         // Show final standings
