@@ -50,7 +50,18 @@ public:
     void GenerateNCAASchedule();
     std::vector<Game> GetFixturesForDay(int dayNumber) const;
     int GetFixtureDayCount() const { return static_cast<int>(fixtureDays.size()); }
-    bool SimulateDay(int dayNumber, bool autoSimComputerGames = true, const std::shared_ptr<Team>& managedTeam = nullptr);
+    // Simulate all games scheduled for a fixture day.
+    // - autoSimComputerGames: if true, computer-vs-computer games are auto-simulated.
+    // - managedTeam: optional team being managed by the user; used to surface urgency.
+    // - interactiveManagedGame: if true and the managedTeam has a game today, that
+    //   managed game's simulation will enable interactive pause handling so the user
+    //   can control the match while other games are auto-simulated.
+    // - speedMultiplier: simulation speed (1,2,3,4,6) forwarded to the match engine.
+    bool SimulateDay(int dayNumber,
+                     bool autoSimComputerGames = true,
+                     const std::shared_ptr<Team>& managedTeam = nullptr,
+                     bool interactiveManagedGame = false,
+                     int speedMultiplier = 6);
     
     // Season simulation
     void SimulateFullSeason(int speedMultiplier = 6);
