@@ -31,7 +31,6 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         teamId = sqlite3_column_int(stmt, 0);
         team->teamId = std::to_string(teamId);
-        // Make copies of strings from sqlite3
         const char* namePtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         const char* confPtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
         team->name = namePtr ? std::string(namePtr) : "";
@@ -43,8 +42,10 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
         team->active = true;
     } else {
         std::cerr << "Team not found: " << teamName << "\n";
+        sqlite3_finalize(stmt);
         return nullptr;
     }
+    sqlite3_finalize(stmt);
     
     // Load roster
     std::string rosterSql = R"(
@@ -68,7 +69,6 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
     while (sqlite3_step(rosterStmt) == SQLITE_ROW) {
         auto player = std::make_shared<Player>();
         
-        // Make copies of all string pointers
         const char* pidPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 0));
         const char* fnPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 1));
         const char* lnPtr = reinterpret_cast<const char*>(sqlite3_column_text(rosterStmt, 2));
@@ -119,6 +119,8 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
         team->roster.push_back(player);
         playerCount++;
     }
+
+    sqlite3_finalize(rosterStmt);
     
     std::cout << "✓ Loaded " << team->name << " with " << playerCount << " players (Prestige: " 
               << team->prestige << ")\n";
@@ -126,13 +128,33 @@ std::shared_ptr<Team> LoadTeam(db::DatabaseManager& db, const std::string& teamN
     return team;
 }
 
+static bool TeamTableHasActiveColumn(db::DatabaseManager& db) {
+    auto stmt = db.PrepareStatement("PRAGMA table_info(teams)");
+    if (!stmt) {
+        return false;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char* columnName = sqlite3_column_text(stmt, 1);
+        if (columnName && std::string(reinterpret_cast<const char*>(columnName)) == "active") {
+            sqlite3_finalize(stmt);
+            return true;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+    return false;
+}
+
 std::vector<std::shared_ptr<Team>> LoadAllTeams(db::DatabaseManager& db) {
     std::cout << "Loading all teams...\n";
     
     std::vector<std::shared_ptr<Team>> allTeams;
     
-    // Load all teams
-    std::string sql = "SELECT id, name, conference, prestige FROM teams WHERE active = 1";
+    const bool hasActiveColumn = TeamTableHasActiveColumn(db);
+    std::string sql = hasActiveColumn
+        ? "SELECT id, name, conference, prestige FROM teams WHERE active = 1"
+        : "SELECT id, name, conference, prestige FROM teams";
     auto stmt = db.PrepareStatement(sql);
     if (!stmt) {
         std::cerr << "Failed to prepare team list query!\n";
@@ -221,10 +243,13 @@ std::vector<std::shared_ptr<Team>> LoadAllTeams(db::DatabaseManager& db) {
                 
                 team->roster.push_back(player);
             }
+            sqlite3_finalize(rosterStmt);
         }
         
         allTeams.push_back(team);
     }
+
+    sqlite3_finalize(stmt);
     
     std::cout << "✓ Loaded " << allTeams.size() << " teams with rosters\n";
     
@@ -242,40 +267,50 @@ int main(int argc, char* argv[]) {
     std::string dbPath = "../bm-data/basketball_manager.db";
     std::string mode = "single";  // "single" or "season"
     
-    // If only one argument, it might be "season" for season mode
-    if (argc == 2) {
-        mode = argv[1];
-        if (mode != "season" && mode != "single") {
-            mode = "single";
-            homeTeamName = argv[1];
+    int positionalIndex = 1;
+    if (argc > 1) {
+        std::string firstArg = argv[1];
+        if (firstArg == "season" || firstArg == "single") {
+            mode = firstArg;
+            positionalIndex = 2;
+        } else {
+            homeTeamName = firstArg;
+            if (argc > 2) {
+                awayTeamName = argv[2];
+            }
+            positionalIndex = 3;
         }
-    } else if (argc >= 3) {
-        homeTeamName = argv[1];
-        awayTeamName = argv[2];
     }
-    if (argc >= 4) {
-        dbPath = argv[3];
+
+    if (argc > positionalIndex) {
+        dbPath = argv[positionalIndex];
+        positionalIndex++;
     }
-    
+
     int speedMultiplier = 1;
-    if (argc >= 5) {
-        speedMultiplier = std::stoi(argv[4]);
-        if (speedMultiplier != 1 && speedMultiplier != 2 && speedMultiplier != 3 && 
-            speedMultiplier != 4 && speedMultiplier != 6) {
-            std::cerr << "Invalid speed multiplier. Must be 1, 2, 3, 4, or 6\n";
+    if (argc > positionalIndex) {
+        try {
+            speedMultiplier = std::stoi(argv[positionalIndex]);
+            if (speedMultiplier != 1 && speedMultiplier != 2 && speedMultiplier != 3 &&
+                speedMultiplier != 4 && speedMultiplier != 6) {
+                std::cerr << "Invalid speed multiplier. Must be 1, 2, 3, 4, or 6\n";
+                speedMultiplier = 1;
+            }
+        } catch (const std::exception&) {
+            std::cerr << "Invalid speed multiplier: " << argv[positionalIndex] << "\n";
             speedMultiplier = 1;
         }
+        positionalIndex++;
     }
     
     bool interactiveMode = false;
-    if (argc >= 6) {
-        std::string interactiveArg = argv[5];
+    if (argc > positionalIndex) {
+        std::string interactiveArg = argv[positionalIndex];
         if (interactiveArg == "interactive" || interactiveArg == "i") {
             interactiveMode = true;
         }
     }
-    
-    // Open database
+
     db::DatabaseManager db;
     if (!db.Open(dbPath)) {
         std::cerr << "Failed to open database: " << dbPath << "\n";
@@ -347,10 +382,15 @@ int main(int argc, char* argv[]) {
 
             if (userTeamGameToday) {
                 std::cout << "Urgent: your team has a game today.\n";
-                std::cout << "Play it now? (y = simulate this day / n = stop season): ";
+                std::cout << "Options: (p) Play your game interactively now, (y) Simulate entire day (AI games included), (n) Stop season\n";
+                std::cout << "Choice [p/y/n]: ";
                 std::string choice;
                 std::getline(std::cin, choice);
-                if (choice != "y" && choice != "Y") {
+                if (choice == "p" || choice == "P") {
+                    season.SimulateDay(currentDay, true, managedTeam, true, speedMultiplier);
+                } else if (choice == "y" || choice == "Y") {
+                    season.SimulateDay(currentDay, true, managedTeam, false, speedMultiplier);
+                } else {
                     continueSeason = false;
                     break;
                 }
@@ -359,13 +399,14 @@ int main(int argc, char* argv[]) {
                 std::cout << "Advance to next day? (y = simulate this day / n = stop): ";
                 std::string choice;
                 std::getline(std::cin, choice);
-                if (choice != "y" && choice != "Y") {
+                if (choice == "y" || choice == "Y") {
+                    season.SimulateDay(currentDay, true, managedTeam, false, speedMultiplier);
+                } else {
                     continueSeason = false;
                     break;
                 }
             }
 
-            season.SimulateDay(currentDay, true, managedTeam);
             currentDay++;
         }
         

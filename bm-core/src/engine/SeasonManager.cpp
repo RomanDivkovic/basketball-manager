@@ -8,6 +8,8 @@
 #include <utility>
 #include <numeric>
 #include <cmath>
+#include <unordered_set>
+#include <optional>
 
 namespace bm {
 namespace engine {
@@ -177,23 +179,58 @@ void SeasonManager::GenerateNCAASchedule() {
 }
 
 void SeasonManager::BuildFixtureDays() {
+    // Distribute schedule across fixture days ensuring a team does not play
+    // more than once on the same day. Use an approximate day count so that
+    // roughly half the teams play each day (one game per team).
     fixtureDays.clear();
-    if (schedule.empty()) {
-        return;
+    if (schedule.empty()) return;
+
+    const int totalTeams = static_cast<int>(allTeams.size());
+    const int gamesPerDayApprox = std::max(1, totalTeams / 2);
+    int dayCount = std::max(30, static_cast<int>(std::ceil(static_cast<float>(schedule.size()) / gamesPerDayApprox)));
+
+    fixtureDays.clear();
+    fixtureDays.reserve(dayCount);
+
+    // Prepare day containers and tracking sets
+    for (int d = 0; d < dayCount; ++d) {
+        FixtureDay fd;
+        fd.dayNumber = d + 1;
+        fd.label = "Day " + std::to_string(d + 1);
+        fd.simulated = false;
+        fixtureDays.push_back(std::move(fd));
     }
 
-    const int dayCount = std::max(30, static_cast<int>(std::ceil(static_cast<float>(schedule.size()) / 8.0f)));
-    fixtureDays.resize(dayCount);
+    std::vector<std::unordered_set<std::string>> teamsScheduled(dayCount);
 
-    for (int dayIndex = 0; dayIndex < dayCount; ++dayIndex) {
-        fixtureDays[dayIndex].dayNumber = dayIndex + 1;
-        fixtureDays[dayIndex].label = "Day " + std::to_string(dayIndex + 1);
-        fixtureDays[dayIndex].simulated = false;
-    }
+    // Place each game into the earliest day where neither team is already
+    // scheduled. If none available, add a new day.
+    for (const auto& g : schedule) {
+        bool placed = false;
+        for (int d = 0; d < static_cast<int>(fixtureDays.size()); ++d) {
+            auto &s = teamsScheduled[d];
+            if (s.find(g.homeTeam->teamId) == s.end() && s.find(g.awayTeam->teamId) == s.end()) {
+                fixtureDays[d].games.push_back(g);
+                s.insert(g.homeTeam->teamId);
+                s.insert(g.awayTeam->teamId);
+                placed = true;
+                break;
+            }
+        }
 
-    for (size_t gameIndex = 0; gameIndex < schedule.size(); ++gameIndex) {
-        int dayIndex = static_cast<int>(gameIndex % dayCount);
-        fixtureDays[dayIndex].games.push_back(schedule[gameIndex]);
+        if (!placed) {
+            FixtureDay fd;
+            fd.dayNumber = static_cast<int>(fixtureDays.size()) + 1;
+            fd.label = "Day " + std::to_string(fd.dayNumber);
+            fd.simulated = false;
+            fd.games.push_back(g);
+            fixtureDays.push_back(std::move(fd));
+
+            std::unordered_set<std::string> s;
+            s.insert(g.homeTeam->teamId);
+            s.insert(g.awayTeam->teamId);
+            teamsScheduled.push_back(std::move(s));
+        }
     }
 }
 
@@ -205,7 +242,7 @@ std::vector<SeasonManager::Game> SeasonManager::GetFixturesForDay(int dayNumber)
     return fixtureDays[index].games;
 }
 
-bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const std::shared_ptr<Team>& managedTeam) {
+bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const std::shared_ptr<Team>& managedTeam, bool interactiveManagedGame, int speedMultiplier) {
     if (dayNumber < 1 || dayNumber > static_cast<int>(fixtureDays.size())) {
         return false;
     }
@@ -216,20 +253,28 @@ bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const 
     }
 
     std::cout << "\n===== " << day.label << " =====\n";
+
+    // Set simulation speed for this day's matches
+    matchEngine->SetSimulationSpeed(static_cast<SimulationSpeed>(speedMultiplier));
+
+    // First, simulate all non-managed games (or all games if not interactive)
+    std::optional<Game> managedGameOpt;
     for (auto& game : day.games) {
-        if (game.played) {
-            continue;
-        }
+        if (game.played) continue;
 
         bool isManagedGame = false;
         if (managedTeam && (game.homeTeam == managedTeam || game.awayTeam == managedTeam)) {
             isManagedGame = true;
         }
 
-        if (isManagedGame && !autoSimComputerGames) {
-            std::cout << "Your team has a game today: " << game.homeTeam->name << " vs " << game.awayTeam->name << "\n";
+        if (isManagedGame && interactiveManagedGame) {
+            // Defer interactive managed game's simulation until after AI games
+            managedGameOpt = game;
+            continue;
         }
 
+        // Auto-simulate this game
+        matchEngine->SetPauseEnabled(false);
         matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
         matchEngine->SimulateFullMatch();
 
@@ -242,6 +287,32 @@ bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const 
         gamesPlayed++;
         std::cout << "[Day " << dayNumber << "] " << game.homeTeam->name << " " << game.homeScore
                   << " - " << game.awayScore << " " << game.awayTeam->name << "\n";
+    }
+
+    // If there is an interactive managed game, run it now with pause enabled
+    if (managedGameOpt.has_value()) {
+        auto game = managedGameOpt.value();
+
+        std::cout << "Your team has a game today: " << game.homeTeam->name << " vs " << game.awayTeam->name << "\n";
+
+        matchEngine->SetPauseEnabled(true);
+        matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
+        matchEngine->SimulateFullMatch();
+
+        auto state = matchEngine->GetMatchState();
+        // find and update the corresponding game in the day.games vector
+        for (auto& gref : day.games) {
+            if (gref.homeTeam == game.homeTeam && gref.awayTeam == game.awayTeam && !gref.played) {
+                gref.homeScore = state->homeScore;
+                gref.awayScore = state->awayScore;
+                gref.played = true;
+                UpdateStandings(gref);
+                gamesPlayed++;
+                std::cout << "[Day " << dayNumber << "] " << gref.homeTeam->name << " " << gref.homeScore
+                          << " - " << gref.awayScore << " " << gref.awayTeam->name << "\n";
+                break;
+            }
+        }
     }
 
     day.simulated = true;
