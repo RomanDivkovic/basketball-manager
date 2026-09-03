@@ -39,6 +39,21 @@ add_subdirectory(player-generator)
 # Match simulator tool
 add_subdirectory(match-simulator)
 
+# Ensure SQLite3 target is available for validation tool
+find_package(SQLite3 REQUIRED)
+
+# Schedule validation tool
+add_executable(validate-schedule
+    validate-schedule/validate_schedule.cpp
+)
+
+target_link_libraries(validate-schedule PRIVATE BMCore SQLite::SQLite3)
+
+target_include_directories(validate-schedule PRIVATE
+    ${CMAKE_SOURCE_DIR}/bm-core/include
+)
+
+
 # Set output directory
 set_target_properties(bm-data-importer PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
