@@ -627,9 +627,12 @@ void MatchEngine::EnsureMinimumRoster(std::shared_ptr<Team> team) {
     std::cout << "[MatchEngine] Padding roster for " << team->name << " with " << missing << " reserve players\n";
     for (int i = 0; i < missing; ++i) {
         auto reserve = std::make_shared<Player>();
-        reserve->playerId = team->name + "_reserve_" + std::to_string(i);
+        // Use teamId for stable unique player IDs and make reserve last-names readable
+        std::string squad = team->name;
+        for (auto &ch : squad) if (ch == ' ') ch = '_';
+        reserve->playerId = team->teamId + "_reserve_" + std::to_string(i + 1);
         reserve->firstName = "Reserve";
-        reserve->lastName = std::to_string(i + 1);
+        reserve->lastName = squad + "_R" + std::to_string(i + 1);
         reserve->position = static_cast<Position>(i % 5);
         reserve->height = 1.95f;
         reserve->weight = 90.0f;
