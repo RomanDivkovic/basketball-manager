@@ -16,27 +16,20 @@ DatabaseLoader::~DatabaseLoader() {
 
 bool DatabaseLoader::LoadNCAATeams(const std::string& dataPath) {
     std::cout << "[DatabaseLoader] Loading NCAA teams from " << dataPath << "\n";
-    
-    // For now, placeholder - will load from CSV/JSON
-    // This will be connected to actual NCAA 2025 data
-    
-    return true;
+    std::cerr << "[DatabaseLoader] NCAA team import is not implemented\n";
+    return false;
 }
 
 bool DatabaseLoader::LoadNCAAPlayers(const std::string& dataPath) {
     std::cout << "[DatabaseLoader] Loading NCAA players from " << dataPath << "\n";
-    
-    // TODO: Load player data
-    
-    return true;
+    std::cerr << "[DatabaseLoader] NCAA player import is not implemented\n";
+    return false;
 }
 
 bool DatabaseLoader::LoadConferences(const std::string& dataPath) {
     std::cout << "[DatabaseLoader] Loading conferences\n";
-    
-    // TODO: Load conference data
-    
-    return true;
+    std::cerr << "[DatabaseLoader] Conference import is not implemented\n";
+    return false;
 }
 
 bool DatabaseLoader::ImportCSV(const std::string& csvPath, const std::string& tableName) {
@@ -48,23 +41,14 @@ bool DatabaseLoader::ImportCSV(const std::string& csvPath, const std::string& ta
         return false;
     }
     
-    std::string line;
-    std::getline(file, line); // Skip header
-    
-    while (std::getline(file, line)) {
-        // Parse and insert
-    }
-    
-    file.close();
-    return true;
+    std::cerr << "[DatabaseLoader] Generic CSV import is not implemented\n";
+    return false;
 }
 
 bool DatabaseLoader::ImportJSON(const std::string& jsonPath) {
     std::cout << "[DatabaseLoader] Importing JSON: " << jsonPath << "\n";
-    
-    // TODO: JSON parsing via rapidjson or similar
-    
-    return true;
+    std::cerr << "[DatabaseLoader] JSON import is not implemented\n";
+    return false;
 }
 
 std::vector<std::string> DatabaseLoader::ParseCSVLine(const std::string& line) {

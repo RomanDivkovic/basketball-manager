@@ -7,6 +7,15 @@ git # Basketball Manager - UI Implementation Roadmap
 - Live stats display
 - Variable speed (1x-6x)
 
+✅ **Native match bridge MVP**: `BMUnityBridge` can now open a database, load teams
+by ID, start a match, advance one possession at a time, read live JSON state, and
+send speed, timeout, and coaching commands. The native contract is exercised by the
+`bridge-smoke` target.
+
+⏳ **Still missing**: season bridge calls, substitutions through the C API, JSON
+escaping/schema versioning, and a Unity scene/project. The current Unity C# file is
+an interop wrapper, not a complete UI.
+
 ## UI Implementation Options
 
 ### Option 1: Web-Based UI (Recommended - Fastest to Market) 🌐
