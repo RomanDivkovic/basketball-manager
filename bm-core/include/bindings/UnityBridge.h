@@ -4,9 +4,16 @@ extern "C" {
 
 // Match simulation interface
 void InitializeMatch(const char* homeTeamId, const char* awayTeamId);
+int SimulatePossession();
 void SimulateMatch();
 const char* GetMatchResult();
 const char* GetLiveCommentary();
+const char* GetMatchStateJson();
+int IsMatchComplete();
+void SetSimulationSpeed(int speedMultiplier);
+void SetPauseEnabled(int enabled);
+void CallTimeout(int isHomeTeam);
+void ApplyCoachingCallout(int isHomeTeam, int callout);
 
 // Season management
 void InitializeSeason(int year);

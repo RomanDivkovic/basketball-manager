@@ -16,6 +16,9 @@ public class BMUnityBridge : MonoBehaviour {
     // C++ function declarations
     [DllImport(PluginName)]
     private static extern void InitializeMatch(string homeTeamId, string awayTeamId);
+
+    [DllImport(PluginName)]
+    private static extern int SimulatePossession();
     
     [DllImport(PluginName)]
     private static extern void SimulateMatch();
@@ -25,6 +28,24 @@ public class BMUnityBridge : MonoBehaviour {
     
     [DllImport(PluginName)]
     private static extern System.IntPtr GetLiveCommentary();
+
+    [DllImport(PluginName)]
+    private static extern System.IntPtr GetMatchStateJson();
+
+    [DllImport(PluginName)]
+    private static extern int IsMatchComplete();
+
+    [DllImport(PluginName)]
+    private static extern void SetSimulationSpeed(int speedMultiplier);
+
+    [DllImport(PluginName)]
+    private static extern void SetPauseEnabled(int enabled);
+
+    [DllImport(PluginName)]
+    private static extern void CallTimeout(int isHomeTeam);
+
+    [DllImport(PluginName)]
+    private static extern void ApplyCoachingCallout(int isHomeTeam, int callout);
     
     [DllImport(PluginName)]
     private static extern void InitializeSeason(int year);
@@ -70,7 +91,30 @@ public class BMUnityBridge : MonoBehaviour {
 
     public static void StartMatch(string homeTeamId, string awayTeamId) {
         InitializeMatch(homeTeamId, awayTeamId);
-        SimulateMatch();
+    }
+
+    public static int AdvancePossession() => SimulatePossession();
+
+    public static bool IsComplete() => IsMatchComplete() != 0;
+
+    public static string GetMatchState() {
+        return Marshal.PtrToStringAnsi(GetMatchStateJson()) ?? "{}";
+    }
+
+    public static void SetSpeed(int speedMultiplier) {
+        SetSimulationSpeed(speedMultiplier);
+    }
+
+    public static void SetInteractive(bool enabled) {
+        SetPauseEnabled(enabled ? 1 : 0);
+    }
+
+    public static void Timeout(bool homeTeam) {
+        CallTimeout(homeTeam ? 1 : 0);
+    }
+
+    public static void CoachCallout(bool homeTeam, int callout) {
+        ApplyCoachingCallout(homeTeam ? 1 : 0, callout);
     }
 
     public static string GetMatchResultText() {

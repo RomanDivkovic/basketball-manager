@@ -9,7 +9,7 @@ add_executable(MatchSimulator
 )
 
 # Link to BMCore library
-target_link_libraries(MatchSimulator PRIVATE BMCore SQLite::SQLite3)
+target_link_libraries(MatchSimulator PRIVATE BMCore SQLite3::SQLite3)
 
 # Include directories
 target_include_directories(MatchSimulator PRIVATE 

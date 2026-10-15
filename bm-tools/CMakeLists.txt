@@ -47,9 +47,19 @@ add_executable(validate-schedule
     validate-schedule/validate_schedule.cpp
 )
 
-target_link_libraries(validate-schedule PRIVATE BMCore SQLite::SQLite3)
+target_link_libraries(validate-schedule PRIVATE BMCore SQLite3::SQLite3)
 
 target_include_directories(validate-schedule PRIVATE
+    ${CMAKE_SOURCE_DIR}/bm-core/include
+)
+
+add_executable(bridge-smoke
+    bridge-smoke/bridge_smoke.cpp
+)
+
+target_link_libraries(bridge-smoke PRIVATE BMCore)
+
+target_include_directories(bridge-smoke PRIVATE
     ${CMAKE_SOURCE_DIR}/bm-core/include
 )
 

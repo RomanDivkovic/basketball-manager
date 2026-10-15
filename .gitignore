@@ -10,6 +10,7 @@ build/
 cmake-build-debug/
 cmake-build-release/
 out/
+**/obj/
 
 # Compiled binaries
 *.dylib
