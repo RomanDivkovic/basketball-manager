@@ -22,6 +22,7 @@ void SimulateRound(int roundNumber);
 // Database
 void LoadDatabase(const char* dbPath);
 void SaveDatabase(const char* dbPath);
+const char* GetTeamsJson();
 
 // AI
 void InitializeAI(const char* teamId);
