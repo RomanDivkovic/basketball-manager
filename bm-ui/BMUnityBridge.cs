@@ -58,6 +58,9 @@ public class BMUnityBridge : MonoBehaviour {
     
     [DllImport(PluginName)]
     private static extern void SaveDatabase(string dbPath);
+
+    [DllImport(PluginName)]
+    private static extern System.IntPtr GetTeamsJson();
     
     [DllImport(PluginName)]
     private static extern void InitializeAI(string teamId);
@@ -87,6 +90,14 @@ public class BMUnityBridge : MonoBehaviour {
         
         string version = Marshal.PtrToStringAnsi(GetEngineVersion());
         Debug.Log("[BMUnityBridge] Engine version: " + version);
+    }
+
+    public static void LoadDb(string dbPath) {
+        LoadDatabase(dbPath);
+    }
+
+    public static string GetAvailableTeamsJson() {
+        return Marshal.PtrToStringAnsi(GetTeamsJson()) ?? "{\"teams\":[]}";
     }
 
     public static void StartMatch(string homeTeamId, string awayTeamId) {

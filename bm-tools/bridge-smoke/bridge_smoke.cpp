@@ -6,6 +6,13 @@
 int main(int argc, char** argv) {
     const char* databasePath = argc > 1 ? argv[1] : "/tmp/basketball_manager_readable.db";
     LoadDatabase(databasePath);
+
+    const char* teams = GetTeamsJson();
+    if (!teams || std::string(teams).find("\"teams\":[{") == std::string::npos) {
+        std::cerr << "Bridge failed to return available teams\n";
+        return EXIT_FAILURE;
+    }
+
     InitializeMatch("1", "2");
 
     const char* initialState = GetMatchStateJson();
