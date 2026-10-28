@@ -71,6 +71,12 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
     matchState->awayRebounds = 0;
     matchState->homeFouls = 0;
     matchState->awayFouls = 0;
+    matchState->homeSteals = 0;
+    matchState->awaySteals = 0;
+    matchState->homeBlocks = 0;
+    matchState->awayBlocks = 0;
+    matchState->homeTurnovers = 0;
+    matchState->awayTurnovers = 0;
     matchState->homeTeamPossession = true;  // Home team starts
     matchState->jumpBallWinner = true;      // Will be set during jump ball
     matchState->possessionCount = 0;
@@ -94,6 +100,9 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
             p->pointsThisGame = 0;
             p->reboundsThisGame = 0;
             p->assistsThisGame = 0;
+            p->stealsThisGame = 0;
+            p->blocksThisGame = 0;
+            p->turnoversThisGame = 0;
             p->foulsThisGame = 0;
         }
 
@@ -112,6 +121,9 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
 
     setupStartingFive(homeTeam, matchState->homeStartingFive);
     setupStartingFive(awayTeam, matchState->awayStartingFive);
+
+    // Initialize initial spatial court positions (tip-off formation)
+    UpdateSpatialState(nullptr, nullptr, "tipoff");
     
     std::cout << "[MatchEngine] Match initialized - " << homeTeam->name << " 0-0 " << awayTeam->name << "\n";
 }
@@ -259,17 +271,29 @@ int MatchEngine::SimulatePossession() {
 
     // Build log
     std::ostringstream oss;
+    std::string actionPhase = "dribble";
 
     float roll = RandomFloat();
     float pointsScored = 0;
 
     if (roll < stealChance) {
         // Steal/turnover
+        actionPhase = "steal";
         oss << passer->firstName << " swings to " << ballHandler->lastName << ", stolen by "
             << defender->lastName << "!";
+        defender->stealsThisGame++;
+        ballHandler->turnoversThisGame++;
+        if (matchState->homeTeamPossession) {
+            matchState->homeTurnovers++;
+            matchState->awaySteals++;
+        } else {
+            matchState->awayTurnovers++;
+            matchState->homeSteals++;
+        }
         matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else if (roll < stealChance + foulChance) {
         // Shooting foul leads to free throws
+        actionPhase = "foul";
         float ftPct = std::clamp(0.72f + (ballHandler->attributes.shooting / 20.0f) * 0.1f, 0.6f, 0.9f);
         int attempts = 2;
         // Occasional and-1 or three-shot foul
@@ -294,10 +318,18 @@ int MatchEngine::SimulatePossession() {
         matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else if (roll < stealChance + foulChance + turnoverChance) {
         // Unforced turnover
+        actionPhase = "turnover";
         oss << ballHandler->firstName << " " << ballHandler->lastName << " loses the handle (turnover).";
+        ballHandler->turnoversThisGame++;
+        if (matchState->homeTeamPossession) {
+            matchState->homeTurnovers++;
+        } else {
+            matchState->awayTurnovers++;
+        }
         matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else {
         // Shot attempt
+        actionPhase = "shot";
         bool isThree = (RandomFloat() < threePointChance);
         float base2pt = 0.44f + (ballHandler->attributes.shooting / 20.0f) * 0.14f;
         base2pt *= (1.0f + (ballHandler->attributes.technical / 20.0f) * 0.05f);
@@ -310,16 +342,21 @@ int MatchEngine::SimulatePossession() {
 
         if (RandomFloat() < blockChance) {
             // Blocked shot -> defensive rebound
+            actionPhase = "block";
             oss << defender->lastName << " rejects " << ballHandler->lastName << "!";
+            defender->blocksThisGame++;
             defender->reboundsThisGame++;
             matchState->lastRebounder = defender;
             if (matchState->homeTeamPossession) {
+                matchState->awayBlocks++;
                 matchState->awayRebounds++;
             } else {
+                matchState->homeBlocks++;
                 matchState->homeRebounds++;
             }
             matchState->homeTeamPossession = !matchState->homeTeamPossession;
         } else if (RandomFloat() < shotMakeProb) {
+            actionPhase = isThree ? "three_make" : "shot_make";
             pointsScored = isThree ? 3.0f : 2.0f;
             oss << passer->firstName << " finds " << ballHandler->lastName << " for "
                 << (isThree ? "a 3!" : "two!");
@@ -333,6 +370,7 @@ int MatchEngine::SimulatePossession() {
             matchState->homeTeamPossession = !matchState->homeTeamPossession;
         } else {
             // Missed shot
+            actionPhase = "miss";
             float offensiveRebChance = std::clamp(0.27f - (defensiveIntensity - 1.0f) * 0.06f, 0.18f, 0.32f);
             bool offensiveRebound = (RandomFloat() < offensiveRebChance);
 
@@ -361,6 +399,9 @@ int MatchEngine::SimulatePossession() {
     }
 
     matchState->lastPlay = oss.str();
+
+    // Update spatial player/ball coordinates for 2D/3D visualization
+    UpdateSpatialState(ballHandler, defender, actionPhase);
 
     // Deduct possession time
     matchState->timeRemaining -= durationSeconds;
@@ -1044,6 +1085,181 @@ void MatchEngine::ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout)
     std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
     
     std::this_thread::sleep_for(std::chrono::milliseconds(1000 / speedMultiplier));
+}
+
+void MatchEngine::UpdateSpatialState(const std::shared_ptr<Player>& ballHandler,
+                                     const std::shared_ptr<Player>& primaryDefender,
+                                     const std::string& actionPhase) {
+    if (!matchState || !matchState->homeTeam || !matchState->awayTeam) return;
+
+    matchState->courtPlayers.clear();
+
+    // Standard NBA/NCAA court dimensions: 94 feet long by 50 feet wide
+    // Left basket: (5.25, 25.0), Right basket: (88.75, 25.0)
+    // Home attacks Right basket (x = 88.75) if homeTeamPossession, Away attacks Left basket (x = 5.25)
+    bool homeHasBall = matchState->homeTeamPossession;
+    float targetBasketX = homeHasBall ? 88.75f : 5.25f;
+    float basketY = 25.0f;
+
+    auto assignTeamCoordinates = [&](const std::vector<std::shared_ptr<Player>>& roster,
+                                     bool isHome,
+                                     bool isOffense) {
+        std::vector<std::shared_ptr<Player>> onCourt;
+        for (const auto& p : roster) {
+            if (p && p->onCourt) onCourt.push_back(p);
+        }
+
+        // Base court anchor depending on offense or defense
+        // Offense sets up around three-point line of target basket (~23.75 ft radius)
+        float basketDirection = isHome ? 1.0f : -1.0f;
+        float baseBackcourtX = isHome ? 25.0f : 69.0f;
+        float baseFrontcourtX = isHome ? 68.0f : 26.0f;
+
+        for (size_t i = 0; i < onCourt.size() && i < 5; ++i) {
+            auto player = onCourt[i];
+            CourtPlayerState cp;
+            cp.playerId = player->playerId;
+            cp.name = player->firstName + " " + player->lastName;
+            cp.teamId = isHome ? matchState->homeTeam->teamId : matchState->awayTeam->teamId;
+            cp.isHome = isHome;
+            cp.position = player->position;
+            cp.jerseyNumber = player->jerseyNumber;
+            cp.hasBall = (ballHandler && player->playerId == ballHandler->playerId);
+
+            // Compute realistic positions based on role & offense/defense
+            float posX = 47.0f; // midcourt default
+            float posY = 25.0f;
+
+            if (actionPhase == "tipoff") {
+                // Circle around center circle (47.0, 25.0)
+                float angle = (i * 72.0f) * 3.14159f / 180.0f;
+                float radius = isOffense ? 6.0f : 9.0f;
+                posX = 47.0f + (isHome ? -1.0f : 1.0f) * std::abs(std::cos(angle) * radius);
+                posY = 25.0f + std::sin(angle) * radius;
+                cp.action = "idle";
+            } else if (isOffense) {
+                // Set up 1-2-2 halfcourt offense towards target basket
+                float hoopX = targetBasketX;
+                float dir = (hoopX > 47.0f) ? -1.0f : 1.0f; // vector from hoop back towards perimeter
+
+                switch (player->position) {
+                    case Position::PG: // Top of the key (around 25-28 feet out)
+                        posX = hoopX + dir * 26.0f;
+                        posY = 25.0f + (RandomFloat() - 0.5f) * 4.0f;
+                        break;
+                    case Position::SG: // Right wing
+                        posX = hoopX + dir * 22.0f;
+                        posY = 10.0f + (RandomFloat() - 0.5f) * 4.0f;
+                        break;
+                    case Position::SF: // Left wing
+                        posX = hoopX + dir * 22.0f;
+                        posY = 40.0f + (RandomFloat() - 0.5f) * 4.0f;
+                        break;
+                    case Position::PF: // High post / short corner
+                        posX = hoopX + dir * 14.0f;
+                        posY = 15.0f + (RandomFloat() - 0.5f) * 4.0f;
+                        break;
+                    case Position::C: // Low post / paint
+                        posX = hoopX + dir * 8.0f;
+                        posY = 28.0f + (RandomFloat() - 0.5f) * 4.0f;
+                        break;
+                }
+
+                // If this player is shooting or driving
+                if (cp.hasBall) {
+                    if (actionPhase == "shot" || actionPhase == "shot_make" || actionPhase == "three_make" || actionPhase == "block") {
+                        cp.action = "shoot";
+                    } else if (actionPhase == "foul") {
+                        cp.action = "foul";
+                    } else if (actionPhase == "turnover" || actionPhase == "steal") {
+                        cp.action = "turnover";
+                    } else {
+                        cp.action = "dribble";
+                    }
+                } else {
+                    cp.action = (actionPhase == "rebound" || actionPhase == "miss") ? "rebound" : "idle";
+                }
+            } else {
+                // Defense: match up between offensive players and hoop
+                float hoopX = targetBasketX;
+                float dir = (hoopX > 47.0f) ? -1.0f : 1.0f;
+
+                switch (player->position) {
+                    case Position::PG: // Defend point
+                        posX = hoopX + dir * 22.0f;
+                        posY = 25.0f;
+                        break;
+                    case Position::SG: // Defend right wing
+                        posX = hoopX + dir * 18.0f;
+                        posY = 13.0f;
+                        break;
+                    case Position::SF: // Defend left wing
+                        posX = hoopX + dir * 18.0f;
+                        posY = 37.0f;
+                        break;
+                    case Position::PF: // Low post defense
+                        posX = hoopX + dir * 11.0f;
+                        posY = 17.0f;
+                        break;
+                    case Position::C: // Rim protector
+                        posX = hoopX + dir * 5.0f;
+                        posY = 25.0f;
+                        break;
+                }
+
+                if (primaryDefender && player->playerId == primaryDefender->playerId) {
+                    if (actionPhase == "block") {
+                        cp.action = "block";
+                    } else if (actionPhase == "steal") {
+                        cp.action = "steal";
+                    } else {
+                        cp.action = "defend";
+                    }
+                } else {
+                    cp.action = (actionPhase == "miss" || actionPhase == "rebound") ? "rebound" : "defend";
+                }
+            }
+
+            // Clamp inside court bounds
+            cp.x = std::clamp(posX, 2.0f, 92.0f);
+            cp.y = std::clamp(posY, 2.0f, 48.0f);
+
+            matchState->courtPlayers.push_back(cp);
+        }
+    };
+
+    assignTeamCoordinates(matchState->homeTeam->roster, true, homeHasBall);
+    assignTeamCoordinates(matchState->awayTeam->roster, false, !homeHasBall);
+
+    // Update ball state
+    matchState->ball.phase = actionPhase;
+    if (ballHandler) {
+        matchState->ball.holderPlayerId = ballHandler->playerId;
+        // Locate ballHandler in courtPlayers
+        for (const auto& cp : matchState->courtPlayers) {
+            if (cp.playerId == ballHandler->playerId) {
+                if (actionPhase == "shot" || actionPhase == "shot_make" || actionPhase == "three_make" || actionPhase == "miss") {
+                    // Ball in flight towards target basket
+                    matchState->ball.x = (cp.x + targetBasketX) * 0.5f;
+                    matchState->ball.y = (cp.y + basketY) * 0.5f;
+                    matchState->ball.z = 11.0f; // arc height
+                    matchState->ball.inFlight = true;
+                } else {
+                    matchState->ball.x = cp.x;
+                    matchState->ball.y = cp.y;
+                    matchState->ball.z = 3.5f; // waist height
+                    matchState->ball.inFlight = false;
+                }
+                break;
+            }
+        }
+    } else {
+        matchState->ball.holderPlayerId = "";
+        matchState->ball.x = 47.0f;
+        matchState->ball.y = 25.0f;
+        matchState->ball.z = 8.0f;
+        matchState->ball.inFlight = true;
+    }
 }
 
 } // namespace engine

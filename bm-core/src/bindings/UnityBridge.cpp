@@ -3,6 +3,7 @@
 #include "engine/MatchEngine.h"
 #include <algorithm>
 #include <cstdio>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -143,6 +144,9 @@ void SerializePlayers(std::ostringstream& json, const std::vector<std::shared_pt
              << ",\"pts\":" << p->pointsThisGame
              << ",\"reb\":" << p->reboundsThisGame
              << ",\"ast\":" << p->assistsThisGame
+             << ",\"stl\":" << p->stealsThisGame
+             << ",\"blk\":" << p->blocksThisGame
+             << ",\"to\":" << p->turnoversThisGame
              << ",\"fls\":" << p->foulsThisGame
              << ",\"stamina\":" << stamina
              << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
@@ -170,6 +174,12 @@ void UpdateStateJson() {
          << ",\"awayRebounds\":" << state.awayRebounds
          << ",\"homeFouls\":" << state.homeFouls
          << ",\"awayFouls\":" << state.awayFouls
+         << ",\"homeSteals\":" << state.homeSteals
+         << ",\"awaySteals\":" << state.awaySteals
+         << ",\"homeBlocks\":" << state.homeBlocks
+         << ",\"awayBlocks\":" << state.awayBlocks
+         << ",\"homeTurnovers\":" << state.homeTurnovers
+         << ",\"awayTurnovers\":" << state.awayTurnovers
          << ",\"homeTimeouts\":" << matchEngine->GetTimeoutsRemaining(true)
          << ",\"awayTimeouts\":" << matchEngine->GetTimeoutsRemaining(false)
          << ",\"homePossession\":" << (state.homeTeamPossession ? "true" : "false")
@@ -179,6 +189,34 @@ void UpdateStateJson() {
     SerializePlayers(json, state.homeTeam->roster);
     json << ",\"awayPlayers\":";
     SerializePlayers(json, state.awayTeam->roster);
+
+    // Serialize 2D/3D court players and ball
+    json << ",\"courtPlayers\":[";
+    bool firstCp = true;
+    for (const auto& cp : state.courtPlayers) {
+        if (!firstCp) json << ",";
+        firstCp = false;
+        json << "{\"id\":\"" << EscapeJson(cp.playerId)
+             << "\",\"name\":\"" << EscapeJson(cp.name)
+             << "\",\"teamId\":\"" << EscapeJson(cp.teamId)
+             << "\",\"isHome\":" << (cp.isHome ? "true" : "false")
+             << ",\"pos\":\"" << PositionToStr(cp.position)
+             << "\",\"jersey\":" << cp.jerseyNumber
+             << ",\"x\":" << std::fixed << std::setprecision(2) << cp.x
+             << ",\"y\":" << std::fixed << std::setprecision(2) << cp.y
+             << ",\"hasBall\":" << (cp.hasBall ? "true" : "false")
+             << ",\"action\":\"" << EscapeJson(cp.action)
+             << "\"}";
+    }
+    json << "],\"ball\":{"
+         << "\"x\":" << std::fixed << std::setprecision(2) << state.ball.x
+         << ",\"y\":" << std::fixed << std::setprecision(2) << state.ball.y
+         << ",\"z\":" << std::fixed << std::setprecision(2) << state.ball.z
+         << ",\"holderId\":\"" << EscapeJson(state.ball.holderPlayerId)
+         << "\",\"inFlight\":" << (state.ball.inFlight ? "true" : "false")
+         << ",\"phase\":\"" << EscapeJson(state.ball.phase)
+         << "\"}";
+
     json << "}";
     stateJson = json.str();
 }
