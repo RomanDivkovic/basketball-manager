@@ -143,6 +143,11 @@ private:
 
     // Ensure we have at least 12 active players by generating placeholders if needed
     void EnsureMinimumRoster(std::shared_ptr<Team> team);
+
+    // Update 2D/3D spatial coordinates for players and ball
+    void UpdateSpatialState(const std::shared_ptr<Player>& ballHandler,
+                            const std::shared_ptr<Player>& primaryDefender,
+                            const std::string& actionPhase);
 };
 
 } // namespace engine

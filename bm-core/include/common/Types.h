@@ -71,6 +71,9 @@ struct Player {
     int pointsThisGame;
     int reboundsThisGame;
     int assistsThisGame;
+    int stealsThisGame;
+    int blocksThisGame;
+    int turnoversThisGame;
     int foulsThisGame;
 };
 
@@ -93,6 +96,30 @@ struct Team {
     bool active;
 };
 
+// Court player position for 2D/3D visualization (coordinates 0-94 length, 0-50 width)
+struct CourtPlayerState {
+    std::string playerId;
+    std::string name;
+    std::string teamId;
+    bool isHome;
+    Position position;
+    int jerseyNumber;
+    float x; // Court length: 0.0 to 94.0 ft
+    float y; // Court width: 0.0 to 50.0 ft
+    bool hasBall;
+    std::string action; // "idle", "dribble", "pass", "shoot", "defend", "rebound", "steal", "block", "turnover", "foul"
+};
+
+// Ball position in 3D/2D space
+struct BallState {
+    float x; // 0.0 to 94.0 ft
+    float y; // 0.0 to 50.0 ft
+    float z; // Height above floor in feet (0 = on floor, 10 = rim height)
+    std::string holderPlayerId; // Empty if ball is in flight / loose
+    bool inFlight;
+    std::string phase; // "dribble", "pass", "shot", "loose", "dead"
+};
+
 // Match state
 struct MatchState {
     std::shared_ptr<Team> homeTeam;
@@ -110,6 +137,15 @@ struct MatchState {
     
     int homeFouls;
     int awayFouls;
+
+    int homeSteals;
+    int awaySteals;
+
+    int homeBlocks;
+    int awayBlocks;
+
+    int homeTurnovers;
+    int awayTurnovers;
     
     // Possession tracking
     bool homeTeamPossession;
@@ -125,6 +161,10 @@ struct MatchState {
     // Starting lineups
     std::vector<std::shared_ptr<Player>> homeStartingFive;
     std::vector<std::shared_ptr<Player>> awayStartingFive;
+
+    // Spatial visualization state (10 active players + ball)
+    std::vector<CourtPlayerState> courtPlayers;
+    BallState ball;
 };
 
 // Tactic configuration
