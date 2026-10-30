@@ -1,6 +1,7 @@
 #include "bindings/UnityBridge.h"
 #include "db/DatabaseManager.h"
 #include "engine/MatchEngine.h"
+#include "engine/SeasonManager.h"
 #include <algorithm>
 #include <cstdio>
 #include <iomanip>
@@ -8,16 +9,22 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
 std::shared_ptr<bm::db::DatabaseManager> database;
 std::unique_ptr<bm::engine::MatchEngine> matchEngine;
+std::unique_ptr<bm::engine::SeasonManager> seasonManager;
+int currentSeasonDay = 1;
 std::shared_ptr<bm::Team> homeTeam;
 std::shared_ptr<bm::Team> awayTeam;
 std::string lastError;
 std::string stateJson;
 std::string teamsJson;
+std::string calendarJson;
+std::string fixturesJson;
+std::string standingsJson;
 std::string commentary;
 
 std::string EscapeJson(const std::string& input) {
@@ -294,10 +301,163 @@ void ApplyCoachingCallout(int isHomeTeam, int callout) {
 
 void InitializeSeason(int year) {
     std::cout << "[UnityBridge] InitializeSeason: " << year << "\n";
+    if (!database || !database->IsOpen()) {
+        std::cerr << "[UnityBridge] Cannot initialize season: database not loaded\n";
+        return;
+    }
+
+    std::vector<std::shared_ptr<bm::Team>> teams;
+    auto stmt = database->PrepareStatement("SELECT id FROM teams ORDER BY id");
+    if (stmt) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int teamId = sqlite3_column_int(stmt, 0);
+            auto team = LoadTeam(std::to_string(teamId).c_str());
+            if (team) {
+                teams.push_back(team);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    if (teams.empty()) {
+        std::cerr << "[UnityBridge] No teams loaded for season initialization\n";
+        return;
+    }
+
+    seasonManager = std::make_unique<bm::engine::SeasonManager>();
+    seasonManager->InitializeSeason(year, "NBA");
+    seasonManager->LoadTeams(teams);
+    seasonManager->GenerateSchedule();
+    currentSeasonDay = 1;
+    std::cout << "[UnityBridge] Season initialized with " << teams.size()
+              << " teams and " << seasonManager->GetFixtureDayCount() << " fixture days\n";
 }
 
 void SimulateRound(int roundNumber) {
-    std::cout << "[UnityBridge] SimulateRound: " << roundNumber << "\n";
+    if (!seasonManager) return;
+    seasonManager->SimulateDay(roundNumber, true, nullptr, false, 6);
+}
+
+int GetCurrentSeasonDay() {
+    return currentSeasonDay;
+}
+
+int GetTotalSeasonDays() {
+    return seasonManager ? seasonManager->GetFixtureDayCount() : 0;
+}
+
+int SimulateSeasonDay(int speedMultiplier) {
+    if (!seasonManager) return 0;
+    int totalDays = seasonManager->GetFixtureDayCount();
+    if (currentSeasonDay > totalDays) return 0;
+
+    bool success = seasonManager->SimulateDay(currentSeasonDay, true, nullptr, false, speedMultiplier > 0 ? speedMultiplier : 6);
+    if (success) {
+        currentSeasonDay++;
+        return 1;
+    }
+    return 0;
+}
+
+const char* GetSeasonCalendarJson() {
+    std::ostringstream json;
+    int totalDays = seasonManager ? seasonManager->GetFixtureDayCount() : 0;
+    int gamesPlayed = seasonManager ? seasonManager->GetGamesPlayed() : 0;
+    int totalGames = seasonManager ? seasonManager->GetTotalGames() : 0;
+    bool isComplete = seasonManager ? seasonManager->IsSeasonComplete() : false;
+
+    json << "{"
+         << "\"currentDay\":" << currentSeasonDay
+         << ",\"totalDays\":" << totalDays
+         << ",\"gamesPlayed\":" << gamesPlayed
+         << ",\"totalGames\":" << totalGames
+         << ",\"isSeasonComplete\":" << (isComplete ? "true" : "false")
+         << "}";
+
+    calendarJson = json.str();
+    return calendarJson.c_str();
+}
+
+const char* GetFixturesForDayJson(int dayNumber) {
+    if (!seasonManager) {
+        fixturesJson = "{\"dayNumber\":0,\"label\":\"No Season\",\"simulated\":false,\"fixtures\":[]}";
+        return fixturesJson.c_str();
+    }
+
+    const auto* day = seasonManager->GetFixtureDay(dayNumber);
+    if (!day) {
+        fixturesJson = "{\"dayNumber\":" + std::to_string(dayNumber) + ",\"label\":\"Day " + std::to_string(dayNumber) + "\",\"simulated\":false,\"fixtures\":[]}";
+        return fixturesJson.c_str();
+    }
+
+    std::ostringstream json;
+    json << "{"
+         << "\"dayNumber\":" << day->dayNumber
+         << ",\"label\":\"" << EscapeJson(day->label) << "\""
+         << ",\"simulated\":" << (day->simulated ? "true" : "false")
+         << ",\"fixtures\":[";
+
+    bool first = true;
+    for (const auto& g : day->games) {
+        if (!first) json << ",";
+        first = false;
+        json << "{"
+             << "\"homeTeamId\":\"" << EscapeJson(g.homeTeam->teamId) << "\""
+             << ",\"homeTeamName\":\"" << EscapeJson(g.homeTeam->name) << "\""
+             << ",\"awayTeamId\":\"" << EscapeJson(g.awayTeam->teamId) << "\""
+             << ",\"awayTeamName\":\"" << EscapeJson(g.awayTeam->name) << "\""
+             << ",\"homeScore\":" << g.homeScore
+             << ",\"awayScore\":" << g.awayScore
+             << ",\"played\":" << (g.played ? "true" : "false")
+             << "}";
+    }
+    json << "]}";
+
+    fixturesJson = json.str();
+    return fixturesJson.c_str();
+}
+
+const char* GetStandingsJson(const char* conference) {
+    if (!seasonManager) {
+        standingsJson = "{\"conference\":\"\",\"standings\":[]}";
+        return standingsJson.c_str();
+    }
+
+    std::string confStr = conference ? conference : "";
+    auto records = seasonManager->GetStandings(confStr);
+
+    std::ostringstream json;
+    json << "{"
+         << "\"conference\":\"" << EscapeJson(confStr) << "\""
+         << ",\"standings\":[";
+
+    bool first = true;
+    int rank = 1;
+    for (const auto& rec : records) {
+        if (!first) json << ",";
+        first = false;
+        json << "{"
+             << "\"rank\":" << rank++
+             << ",\"teamId\":\"" << EscapeJson(rec.team->teamId) << "\""
+             << ",\"teamName\":\"" << EscapeJson(rec.team->name) << "\""
+             << ",\"conference\":\"" << EscapeJson(rec.team->conferenceId) << "\""
+             << ",\"wins\":" << rec.wins
+             << ",\"losses\":" << rec.losses
+             << ",\"homeWins\":" << rec.homeWins
+             << ",\"homeLosses\":" << rec.homeLosses
+             << ",\"awayWins\":" << rec.awayWins
+             << ",\"awayLosses\":" << rec.awayLosses
+             << ",\"pointsFor\":" << rec.pointsFor
+             << ",\"pointsAgainst\":" << rec.pointsAgainst
+             << ",\"winPercentage\":" << std::fixed << std::setprecision(3) << rec.winPercentage
+             << ",\"confWins\":" << rec.conferenceWins
+             << ",\"confLosses\":" << rec.conferenceLosses
+             << "}";
+    }
+    json << "]}";
+
+    standingsJson = json.str();
+    return standingsJson.c_str();
 }
 
 void LoadDatabase(const char* dbPath) {

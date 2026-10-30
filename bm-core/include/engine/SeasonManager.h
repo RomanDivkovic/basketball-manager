@@ -49,6 +49,7 @@ public:
     void GenerateNBASchedule();
     void GenerateNCAASchedule();
     std::vector<Game> GetFixturesForDay(int dayNumber) const;
+    const FixtureDay* GetFixtureDay(int dayNumber) const;
     int GetFixtureDayCount() const { return static_cast<int>(fixtureDays.size()); }
     // Simulate all games scheduled for a fixture day.
     // - autoSimComputerGames: if true, computer-vs-computer games are auto-simulated.

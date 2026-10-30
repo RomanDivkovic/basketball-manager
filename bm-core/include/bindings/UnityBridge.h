@@ -18,6 +18,12 @@ void ApplyCoachingCallout(int isHomeTeam, int callout);
 // Season management
 void InitializeSeason(int year);
 void SimulateRound(int roundNumber);
+int GetCurrentSeasonDay();
+int GetTotalSeasonDays();
+int SimulateSeasonDay(int speedMultiplier);
+const char* GetSeasonCalendarJson();
+const char* GetFixturesForDayJson(int dayNumber);
+const char* GetStandingsJson(const char* conference);
 
 // Database
 void LoadDatabase(const char* dbPath);

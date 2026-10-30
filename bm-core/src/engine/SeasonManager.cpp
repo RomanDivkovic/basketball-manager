@@ -242,6 +242,14 @@ std::vector<SeasonManager::Game> SeasonManager::GetFixturesForDay(int dayNumber)
     return fixtureDays[index].games;
 }
 
+const SeasonManager::FixtureDay* SeasonManager::GetFixtureDay(int dayNumber) const {
+    const int index = std::max(0, dayNumber - 1);
+    if (index >= static_cast<int>(fixtureDays.size())) {
+        return nullptr;
+    }
+    return &fixtureDays[index];
+}
+
 bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const std::shared_ptr<Team>& managedTeam, bool interactiveManagedGame, int speedMultiplier) {
     if (dayNumber < 1 || dayNumber > static_cast<int>(fixtureDays.size())) {
         return false;
