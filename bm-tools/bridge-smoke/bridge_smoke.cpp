@@ -30,5 +30,17 @@ int main(int argc, char** argv) {
     }
 
     std::cout << updatedState << "\n";
+
+    // Validate Season & Schedule bindings
+    std::cout << "\n[Season Bridge Test] Initializing 2026/27 NBA Season...\n";
+    InitializeSeason(2026);
+    std::cout << "Calendar: " << GetSeasonCalendarJson() << "\n";
+    std::cout << "Day 1 Fixtures: " << GetFixturesForDayJson(1) << "\n";
+    std::cout << "Simulating Day 1...\n";
+    int simResult = SimulateSeasonDay(6);
+    std::cout << "SimulateDay result: " << simResult << "\n";
+    std::cout << "Day 1 Fixtures (post-sim): " << GetFixturesForDayJson(1) << "\n";
+    std::cout << "Eastern Standings: " << GetStandingsJson("Eastern") << "\n";
+
     return EXIT_SUCCESS;
 }
