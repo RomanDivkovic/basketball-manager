@@ -68,3 +68,17 @@ docs/.doctrees/
 # Instructions (custom prompts - keep private)
 .github/instructions/
 istruct.instructions.md
+
+# Unity temporary files & build artifacts
+UI-unity-bm26/[Ll]ibrary/
+UI-unity-bm26/[Tt]emp/
+UI-unity-bm26/[Oo]bj/
+UI-unity-bm26/[Bb]uild/
+UI-unity-bm26/[Bb]uilds/
+UI-unity-bm26/[Ll]ogs/
+UI-unity-bm26/[Uu]ser[Ss]ettings/
+UI-unity-bm26/*.csproj
+UI-unity-bm26/*.sln
+UI-unity-bm26/*.slnx
+UI-unity-bm26/*.pidb
+UI-unity-bm26/*.userprefs
