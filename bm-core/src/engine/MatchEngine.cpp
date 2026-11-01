@@ -212,7 +212,20 @@ void MatchEngine::SimulateJumpBall() {
 }
 
 int MatchEngine::SimulatePossession() {
-    if (!matchState) return 0;
+    if (!matchState || matchState->matchComplete) return 0;
+
+    // Check if current quarter is out of time
+    if (matchState->timeRemaining <= 0) {
+        if (matchState->quarterNumber < 4) {
+            AdvanceQuarter();
+        } else if (matchState->homeScore != matchState->awayScore) {
+            matchState->matchComplete = true;
+            return 0;
+        } else {
+            // Overtime
+            AdvanceQuarter();
+        }
+    }
 
     matchState->possessionCount++;
 
@@ -462,47 +475,51 @@ void MatchEngine::ApplyFatigue(float secondsPlayed) {
     }
 }
 
-void MatchEngine::SimulateQuarter(int quarterNumber) {
+void MatchEngine::StartQuarter(int quarterNumber) {
     if (!matchState) return;
-    
+
     matchState->quarterNumber = quarterNumber;
-    matchState->timeRemaining = 720;  // Reset to 12 minutes per quarter
-    
+    matchState->timeRemaining = (quarterNumber <= 4) ? 720 : 300; // 12 min regulation, 5 min OT
+
     // Reset timeouts at halftime
     if (quarterNumber == 3) {
         homeTimeoutsRemaining = 3;
         awayTimeoutsRemaining = 3;
         std::cout << "\n[HALFTIME] Timeouts reset to 3 per team\n";
     }
-    
+
     std::cout << "\n═════════════════ QUARTER " << quarterNumber << " ═════════════════\n";
 
-    // Possession arrow rules:
-    // Q1: Jump ball determines winner
-    // Q2 & Q3: Loser of Q1 tip gets possession  
-    // Q4: Winner of Q1 tip gets possession back
-    // OT: Jump ball again
+    // Possession arrow rules
     if (quarterNumber == 1) {
         SimulateJumpBall();
     } else if (quarterNumber >= 5) {
-        // Overtime - jump ball again
         SimulateJumpBall();
     } else {
-        // Q2, Q3, Q4 - use possession arrow
         if (quarterNumber == 2 || quarterNumber == 3) {
-            // Loser of Q1 tip starts Q2 and Q3
             matchState->homeTeamPossession = !matchState->jumpBallWinner;
             std::string startingTeam = matchState->homeTeamPossession ? 
                 matchState->homeTeam->name : matchState->awayTeam->name;
             std::cout << "\n[POSSESSION ARROW] " << startingTeam << " starts with the ball\n";
         } else if (quarterNumber == 4) {
-            // Winner of Q1 tip gets it back for Q4
             matchState->homeTeamPossession = matchState->jumpBallWinner;
             std::string startingTeam = matchState->homeTeamPossession ? 
                 matchState->homeTeam->name : matchState->awayTeam->name;
             std::cout << "\n[POSSESSION ARROW] " << startingTeam << " starts with the ball\n";
         }
     }
+}
+
+void MatchEngine::AdvanceQuarter() {
+    if (!matchState) return;
+    int nextQuarter = matchState->quarterNumber + 1;
+    StartQuarter(nextQuarter);
+}
+
+void MatchEngine::SimulateQuarter(int quarterNumber) {
+    if (!matchState) return;
+    
+    StartQuarter(quarterNumber);
 
     // Run until the quarter clock expires
     while (matchState->timeRemaining > 0) {

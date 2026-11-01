@@ -464,25 +464,44 @@ const char* GetStandingsJson(const char* conference) {
 }
 
 int GeneratePlayoffBracket() {
+    if (!seasonManager) {
+        InitializeSeason(2026);
+    }
     if (!seasonManager) return 0;
     seasonManager->GeneratePlayoffBracket();
     return 1;
 }
 
 int AdvancePlayoffRound(int speedMultiplier) {
+    if (!seasonManager) {
+        InitializeSeason(2026);
+    }
     if (!seasonManager) return 0;
+    if (!seasonManager->ArePlayoffsGenerated()) {
+        seasonManager->GeneratePlayoffBracket();
+    }
     return seasonManager->AdvancePlayoffRound(speedMultiplier > 0 ? speedMultiplier : 6) ? 1 : 0;
 }
 
 int SimulatePlayoffGame(const char* seriesId, int speedMultiplier) {
+    if (!seasonManager) {
+        InitializeSeason(2026);
+    }
     if (!seasonManager || !seriesId) return 0;
     return seasonManager->SimulatePlayoffGame(seriesId, speedMultiplier > 0 ? speedMultiplier : 6) ? 1 : 0;
 }
 
 const char* GetPlayoffsBracketJson() {
-    if (!seasonManager || !seasonManager->ArePlayoffsGenerated()) {
+    if (!seasonManager) {
+        InitializeSeason(2026);
+    }
+    if (!seasonManager) {
         playoffsJson = "{\"generated\":false,\"isComplete\":false,\"currentRound\":0,\"series\":[]}";
         return playoffsJson.c_str();
+    }
+
+    if (!seasonManager->ArePlayoffsGenerated()) {
+        seasonManager->GeneratePlayoffBracket();
     }
 
     const auto& bracket = seasonManager->GetPlayoffBracket();

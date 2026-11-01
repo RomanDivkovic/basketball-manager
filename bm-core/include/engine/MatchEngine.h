@@ -94,6 +94,10 @@ public:
     // Apply coaching callout to a team
     void ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout);
 
+    // Quarter management
+    void StartQuarter(int quarterNumber);
+    void AdvanceQuarter();
+
     // Get remaining timeouts for a team
     int GetTimeoutsRemaining(bool isHomeTeam) const { 
         return isHomeTeam ? homeTimeoutsRemaining : awayTimeoutsRemaining; 
