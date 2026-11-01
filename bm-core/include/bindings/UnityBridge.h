@@ -25,6 +25,11 @@ const char* GetSeasonCalendarJson();
 const char* GetFixturesForDayJson(int dayNumber);
 const char* GetStandingsJson(const char* conference);
 
+// Tactics & Lineup management
+const char* GetTeamRosterDetailsJson(const char* teamId);
+void SetTeamTactics(int isHomeTeam, int offensiveStrategy, int defensiveStrategy, int pace);
+int SwapMatchPlayers(int isHomeTeam, const char* playerOutId, const char* playerInId);
+
 // Database
 void LoadDatabase(const char* dbPath);
 void SaveDatabase(const char* dbPath);
