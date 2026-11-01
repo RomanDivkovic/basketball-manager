@@ -25,6 +25,7 @@ std::string teamsJson;
 std::string calendarJson;
 std::string fixturesJson;
 std::string standingsJson;
+std::string teamRosterJson;
 std::string commentary;
 
 std::string EscapeJson(const std::string& input) {
@@ -518,6 +519,93 @@ void GetAILineup(char* outBuffer, int bufferSize) {
         }
     }
     std::snprintf(outBuffer, static_cast<size_t>(bufferSize), "%s", lineup.c_str());
+}
+
+const char* GetTeamRosterDetailsJson(const char* teamId) {
+    auto team = LoadTeam(teamId);
+    if (!team) {
+        teamRosterJson = "{\"teamId\":\"\",\"teamName\":\"\",\"players\":[]}";
+        return teamRosterJson.c_str();
+    }
+
+    std::ostringstream json;
+    json << "{\"teamId\":\"" << EscapeJson(team->teamId) << "\""
+         << ",\"teamName\":\"" << EscapeJson(team->name) << "\""
+         << ",\"conference\":\"" << EscapeJson(team->conferenceId) << "\""
+         << ",\"prestige\":" << team->prestige
+         << ",\"players\":[";
+
+    bool first = true;
+    for (const auto& p : team->roster) {
+        if (!p) continue;
+        if (!first) json << ",";
+        first = false;
+        int stamina = std::clamp(static_cast<int>((1.0f - p->fatigueLevel) * 100.0f), 0, 100);
+        json << "{\"id\":\"" << EscapeJson(p->playerId) << "\""
+             << ",\"firstName\":\"" << EscapeJson(p->firstName) << "\""
+             << ",\"lastName\":\"" << EscapeJson(p->lastName) << "\""
+             << ",\"name\":\"" << EscapeJson(p->firstName + " " + p->lastName) << "\""
+             << ",\"pos\":\"" << PositionToStr(p->position) << "\""
+             << ",\"jersey\":" << p->jerseyNumber
+             << ",\"rating\":" << p->attributes.currentAbility
+             << ",\"potential\":" << p->attributes.potentialAbility
+             << ",\"pace\":" << p->attributes.pace
+             << ",\"shooting\":" << p->attributes.shooting
+             << ",\"ballControl\":" << p->attributes.ballControl
+             << ",\"defense\":" << p->attributes.defense
+             << ",\"physical\":" << p->attributes.physical
+             << ",\"technical\":" << p->attributes.technical
+             << ",\"stamina\":" << stamina
+             << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
+             << "}";
+    }
+    json << "]}";
+
+    teamRosterJson = json.str();
+    return teamRosterJson.c_str();
+}
+
+void SetTeamTactics(int isHomeTeam, int offensiveStrategy, int defensiveStrategy, int pace) {
+    if (!matchEngine) return;
+    auto tm = matchEngine->GetTacticalManager();
+    if (!tm) return;
+
+    auto off = static_cast<bm::engine::OffensiveStrategy>(std::clamp(offensiveStrategy, 0, 5));
+    auto def = static_cast<bm::engine::DefensiveStrategy>(std::clamp(defensiveStrategy, 0, 5));
+
+    if (isHomeTeam != 0) {
+        tm->SetHomeOffensiveStrategy(off);
+        tm->SetHomeDefensiveStrategy(def);
+    } else {
+        tm->SetAwayOffensiveStrategy(off);
+        tm->SetAwayDefensiveStrategy(def);
+    }
+}
+
+int SwapMatchPlayers(int isHomeTeam, const char* playerOutId, const char* playerInId) {
+    if (!matchEngine || !playerOutId || !playerInId) return 0;
+    auto tm = matchEngine->GetTacticalManager();
+    if (!tm) return 0;
+
+    auto targetTeam = (isHomeTeam != 0) ? homeTeam : awayTeam;
+    if (!targetTeam) return 0;
+
+    std::shared_ptr<bm::Player> pOut = nullptr;
+    std::shared_ptr<bm::Player> pIn = nullptr;
+
+    for (auto& p : targetTeam->roster) {
+        if (p->playerId == playerOutId) pOut = p;
+        if (p->playerId == playerInId) pIn = p;
+    }
+
+    if (!pOut || !pIn) return 0;
+
+    bool success = tm->ManualSubstitution(targetTeam, pOut, pIn, 0);
+    if (success) {
+        UpdateStateJson();
+        return 1;
+    }
+    return 0;
 }
 
 const char* GetEngineVersion() {
