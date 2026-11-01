@@ -638,7 +638,9 @@ bool SeasonManager::SimulatePlayoffGame(const std::string& seriesId, int speedMu
         if (series.seriesId == seriesId) {
             if (series.complete || !series.team1 || !series.team2) return false;
 
-            matchEngine->SetSimulationSpeed(static_cast<SimulationSpeed>(speedMultiplier));
+            if (matchEngine) {
+                matchEngine->SetSpeedMultiplier(speedMultiplier >= 6 ? 0 : speedMultiplier);
+            }
 
             int gameNum = series.team1Wins + series.team2Wins;
             bool team1Home = true;
@@ -958,6 +960,9 @@ void SeasonManager::SimulatePlayoffs(int speedMultiplier) {
 }
 
 void SeasonManager::SimulateSeries(PlayoffSeries& series, int speedMultiplier) {
+    if (matchEngine) {
+        matchEngine->SetSpeedMultiplier(speedMultiplier >= 6 ? 0 : speedMultiplier);
+    }
     int target = series.targetWins > 0 ? series.targetWins : 4;
     while (series.team1Wins < target && series.team2Wins < target) {
         Game game;

@@ -63,6 +63,16 @@ target_include_directories(bridge-smoke PRIVATE
     ${CMAKE_SOURCE_DIR}/bm-core/include
 )
 
+add_executable(bm-core-tests
+    tests/test_suite.cpp
+)
+
+target_link_libraries(bm-core-tests PRIVATE BMCore SQLite3::SQLite3)
+
+target_include_directories(bm-core-tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/bm-core/include
+)
+
 
 # Set output directory
 set_target_properties(bm-data-importer PROPERTIES
