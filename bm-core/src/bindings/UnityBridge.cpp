@@ -25,6 +25,8 @@ std::string teamsJson;
 std::string calendarJson;
 std::string fixturesJson;
 std::string standingsJson;
+std::string playoffsJson;
+std::string championJson;
 std::string teamRosterJson;
 std::string commentary;
 
@@ -459,6 +461,102 @@ const char* GetStandingsJson(const char* conference) {
 
     standingsJson = json.str();
     return standingsJson.c_str();
+}
+
+int GeneratePlayoffBracket() {
+    if (!seasonManager) return 0;
+    seasonManager->GeneratePlayoffBracket();
+    return 1;
+}
+
+int AdvancePlayoffRound(int speedMultiplier) {
+    if (!seasonManager) return 0;
+    return seasonManager->AdvancePlayoffRound(speedMultiplier > 0 ? speedMultiplier : 6) ? 1 : 0;
+}
+
+int SimulatePlayoffGame(const char* seriesId, int speedMultiplier) {
+    if (!seasonManager || !seriesId) return 0;
+    return seasonManager->SimulatePlayoffGame(seriesId, speedMultiplier > 0 ? speedMultiplier : 6) ? 1 : 0;
+}
+
+const char* GetPlayoffsBracketJson() {
+    if (!seasonManager || !seasonManager->ArePlayoffsGenerated()) {
+        playoffsJson = "{\"generated\":false,\"isComplete\":false,\"currentRound\":0,\"series\":[]}";
+        return playoffsJson.c_str();
+    }
+
+    const auto& bracket = seasonManager->GetPlayoffBracket();
+    std::ostringstream json;
+    json << "{"
+         << "\"generated\":true"
+         << ",\"isComplete\":" << (seasonManager->ArePlayoffsComplete() ? "true" : "false")
+         << ",\"currentRound\":" << seasonManager->GetCurrentPlayoffRound()
+         << ",\"series\":[";
+
+    bool first = true;
+    for (const auto& s : bracket) {
+        if (!first) json << ",";
+        first = false;
+        json << "{"
+             << "\"seriesId\":\"" << EscapeJson(s.seriesId) << "\""
+             << ",\"roundName\":\"" << EscapeJson(s.roundName) << "\""
+             << ",\"conference\":\"" << EscapeJson(s.conference) << "\""
+             << ",\"roundIndex\":" << s.roundIndex
+             << ",\"seriesIndex\":" << s.seriesIndex
+             << ",\"team1Id\":\"" << (s.team1 ? EscapeJson(s.team1->teamId) : "") << "\""
+             << ",\"team1Name\":\"" << (s.team1 ? EscapeJson(s.team1->name) : "TBD") << "\""
+             << ",\"team1Seed\":" << s.team1Seed
+             << ",\"team1Wins\":" << s.team1Wins
+             << ",\"team2Id\":\"" << (s.team2 ? EscapeJson(s.team2->teamId) : "") << "\""
+             << ",\"team2Name\":\"" << (s.team2 ? EscapeJson(s.team2->name) : "TBD") << "\""
+             << ",\"team2Seed\":" << s.team2Seed
+             << ",\"team2Wins\":" << s.team2Wins
+             << ",\"targetWins\":" << s.targetWins
+             << ",\"complete\":" << (s.complete ? "true" : "false")
+             << ",\"winnerId\":\"" << (s.winner ? EscapeJson(s.winner->teamId) : "") << "\""
+             << ",\"winnerName\":\"" << (s.winner ? EscapeJson(s.winner->name) : "") << "\""
+             << ",\"games\":[";
+        
+        bool firstGame = true;
+        for (const auto& g : s.games) {
+            if (!firstGame) json << ",";
+            firstGame = false;
+            json << "{"
+                 << "\"homeTeamName\":\"" << EscapeJson(g.homeTeam->name) << "\""
+                 << ",\"awayTeamName\":\"" << EscapeJson(g.awayTeam->name) << "\""
+                 << ",\"homeScore\":" << g.homeScore
+                 << ",\"awayScore\":" << g.awayScore
+                 << "}";
+        }
+        json << "]}";
+    }
+    json << "]}";
+
+    playoffsJson = json.str();
+    return playoffsJson.c_str();
+}
+
+int ArePlayoffsComplete() {
+    return (seasonManager && seasonManager->ArePlayoffsComplete()) ? 1 : 0;
+}
+
+const char* GetPlayoffChampionJson() {
+    if (!seasonManager || !seasonManager->ArePlayoffsComplete() || !seasonManager->GetChampion()) {
+        championJson = "{\"hasChampion\":false}";
+        return championJson.c_str();
+    }
+
+    auto champ = seasonManager->GetChampion();
+    std::ostringstream json;
+    json << "{"
+         << "\"hasChampion\":true"
+         << ",\"teamId\":\"" << EscapeJson(champ->teamId) << "\""
+         << ",\"teamName\":\"" << EscapeJson(champ->name) << "\""
+         << ",\"conference\":\"" << EscapeJson(champ->conferenceId) << "\""
+         << "}";
+
+    championJson = json.str();
+    return championJson.c_str();
 }
 
 void LoadDatabase(const char* dbPath) {

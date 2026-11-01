@@ -206,7 +206,9 @@ void MatchEngine::SimulateJumpBall() {
     std::cout << "║  " << std::left << std::setw(60) << (winnerName + " will start with possession") << " ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════════╝\n\n";
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(800 / speedMultiplier));
+    if (speedMultiplier > 0 && speedMultiplier < 6) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(800 / speedMultiplier));
+    }
 }
 
 int MatchEngine::SimulatePossession() {
@@ -428,9 +430,9 @@ int MatchEngine::SimulatePossession() {
               << std::setw(3) << std::left << matchState->awayScore << " | "
               << matchState->lastPlay << "\n";
 
-    // Optional pacing delay based on speed multiplier
+    // Optional pacing delay based on speed multiplier (skip delay if speedMultiplier <= 0 or for background sim >= 6)
     int baseDelayMs = 400;
-    if (speedMultiplier > 0) {
+    if (speedMultiplier > 0 && speedMultiplier < 6) {
         std::this_thread::sleep_for(std::chrono::milliseconds(baseDelayMs / speedMultiplier));
     }
 

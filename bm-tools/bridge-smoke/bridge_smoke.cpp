@@ -42,5 +42,14 @@ int main(int argc, char** argv) {
     std::cout << "Day 1 Fixtures (post-sim): " << GetFixturesForDayJson(1) << "\n";
     std::cout << "Eastern Standings: " << GetStandingsJson("Eastern") << "\n";
 
+    // Validate Playoff system
+    std::cout << "\n[Playoffs Bridge Test] Generating Playoff Bracket...\n";
+    int bracketOk = GeneratePlayoffBracket();
+    std::cout << "GeneratePlayoffBracket result: " << bracketOk << "\n";
+    std::cout << "Playoffs Initial JSON: " << GetPlayoffsBracketJson() << "\n";
+    std::cout << "Simulating Play-In round...\n";
+    AdvancePlayoffRound(6);
+    std::cout << "Playoffs post-round JSON: " << GetPlayoffsBracketJson() << "\n";
+
     return EXIT_SUCCESS;
 }

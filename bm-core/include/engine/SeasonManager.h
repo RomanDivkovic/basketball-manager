@@ -96,14 +96,43 @@ public:
     void PrintStandings() const;
     
     // Playoffs
+    struct PlayoffSeries {
+        std::string seriesId;
+        std::string roundName; // "Play-In", "Conference Quarterfinals", "Conference Semifinals", "Conference Finals", "NBA Finals"
+        std::string conference; // "Eastern", "Western", or "NBA Finals"
+        int roundIndex; // 0=PlayIn, 1=FirstRound, 2=ConfSemis, 3=ConfFinals, 4=NBAFinals
+        int seriesIndex;
+        std::shared_ptr<Team> team1; // Higher seed / home court
+        std::shared_ptr<Team> team2; // Lower seed
+        int team1Seed;
+        int team2Seed;
+        int team1Wins;
+        int team2Wins;
+        std::vector<Game> games;
+        bool complete;
+        std::shared_ptr<Team> winner;
+        int targetWins; // 1 for Play-In, 4 for Best-of-7
+
+        PlayoffSeries() : roundIndex(0), seriesIndex(0), team1Seed(0), team2Seed(0),
+                          team1Wins(0), team2Wins(0), complete(false), targetWins(4) {}
+    };
+
     void GeneratePlayoffBracket();
+    bool AdvancePlayoffRound(int speedMultiplier = 6);
+    bool SimulatePlayoffGame(const std::string& seriesId, int speedMultiplier = 6);
     void SimulatePlayoffs(int speedMultiplier = 6);
     
+    // Playoff inspection
+    const std::vector<PlayoffSeries>& GetPlayoffBracket() const { return playoffBracket; }
+    int GetCurrentPlayoffRound() const { return currentPlayoffRound; }
+    const std::shared_ptr<Team>& GetChampion() const { return champion; }
+    bool ArePlayoffsGenerated() const { return playoffsGenerated; }
+    bool ArePlayoffsComplete() const { return playoffsComplete; }
+
     // Season info
     int GetGamesPlayed() const { return gamesPlayed; }
     int GetTotalGames() const { return totalGames; }
     bool IsSeasonComplete() const { return gamesPlayed >= totalGames; }
-    bool ArePlayoffsComplete() const { return playoffsComplete; }
     
 private:
     std::shared_ptr<MatchEngine> matchEngine;
@@ -116,7 +145,10 @@ private:
     std::string leagueType;
     int gamesPlayed;
     int totalGames;
+    bool playoffsGenerated;
     bool playoffsComplete;
+    int currentPlayoffRound;
+    std::shared_ptr<Team> champion;
 
     void BuildFixtureDays();
     
@@ -125,20 +157,9 @@ private:
     void CalculateWinPercentages();
     
     // Playoff helpers
-    struct PlayoffSeries {
-        std::shared_ptr<Team> team1;
-        std::shared_ptr<Team> team2;
-        int team1Wins;
-        int team2Wins;
-        std::vector<Game> games;
-        bool complete;
-        std::shared_ptr<Team> winner;
-        
-        PlayoffSeries() : team1Wins(0), team2Wins(0), complete(false) {}
-    };
-    
     std::vector<PlayoffSeries> playoffBracket;
     void SimulateSeries(PlayoffSeries& series, int speedMultiplier);
+    void SetupNextPlayoffRound();
 };
 
 } // namespace engine

@@ -25,6 +25,14 @@ const char* GetSeasonCalendarJson();
 const char* GetFixturesForDayJson(int dayNumber);
 const char* GetStandingsJson(const char* conference);
 
+// Playoffs management
+int GeneratePlayoffBracket();
+int AdvancePlayoffRound(int speedMultiplier);
+int SimulatePlayoffGame(const char* seriesId, int speedMultiplier);
+const char* GetPlayoffsBracketJson();
+int ArePlayoffsComplete();
+const char* GetPlayoffChampionJson();
+
 // Tactics & Lineup management
 const char* GetTeamRosterDetailsJson(const char* teamId);
 void SetTeamTactics(int isHomeTeam, int offensiveStrategy, int defensiveStrategy, int pace);

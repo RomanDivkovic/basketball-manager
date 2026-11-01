@@ -57,8 +57,9 @@ public:
     // Initialize match between two teams
     void InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_ptr<Team> awayTeam);
 
-    // Set simulation speed multiplier (x1, x2, x3, x4, x6)
+    // Set simulation speed multiplier (x1, x2, x3, x4, x6, 0 for instant)
     void SetSimulationSpeed(SimulationSpeed speed) { speedMultiplier = static_cast<int>(speed); }
+    void SetSpeedMultiplier(int speed) { speedMultiplier = speed; }
 
     // Get tactical manager for strategy/substitution control
     std::shared_ptr<TacticalManager> GetTacticalManager() { return tacticalManager; }
