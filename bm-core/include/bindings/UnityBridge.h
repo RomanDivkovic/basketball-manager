@@ -5,6 +5,8 @@ extern "C" {
 // Match simulation interface
 void InitializeMatch(const char* homeTeamId, const char* awayTeamId);
 int SimulatePossession();
+// Plays up to `seconds` game seconds (positions, ball, clock); returns the seconds actually played
+int StepMatchSeconds(int seconds);
 void SimulateMatch();
 const char* GetMatchResult();
 const char* GetLiveCommentary();
