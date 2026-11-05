@@ -206,63 +206,201 @@ void MatchEngine::SimulateJumpBall() {
     std::cout << "║  " << std::left << std::setw(60) << (winnerName + " will start with possession") << " ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════════╝\n\n";
 
-    if (speedMultiplier > 0 && speedMultiplier < 6) {
+    if (!headless && speedMultiplier > 0 && speedMultiplier < 6) {
         std::this_thread::sleep_for(std::chrono::milliseconds(800 / speedMultiplier));
     }
 }
 
-int MatchEngine::SimulatePossession() {
-    if (!matchState || matchState->matchComplete) return 0;
+// Players ordered by role (PG..C), best ball handler first inside a role; used to pair matchups and floor spots
+static std::vector<std::shared_ptr<Player>> SortByRole(std::vector<std::shared_ptr<Player>> players) {
+    std::stable_sort(players.begin(), players.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {
+        if (a->position != b->position) return static_cast<int>(a->position) < static_cast<int>(b->position);
+        return a->attributes.ballControl > b->attributes.ballControl;
+    });
+    return players;
+}
+
+// Weighted random pick; falls back to the first candidate when every weight is zero
+template <typename WeightFn>
+static std::shared_ptr<Player> PickWeighted(const std::vector<std::shared_ptr<Player>>& candidates, WeightFn weightOf) {
+    if (candidates.empty()) return nullptr;
+    float total = 0.0f;
+    for (const auto& p : candidates) total += std::max(0.0f, weightOf(p));
+    if (total <= 0.0f) return candidates.front();
+    float target = RandomFloat() * total;
+    for (const auto& p : candidates) {
+        target -= std::max(0.0f, weightOf(p));
+        if (target <= 0.0f) return p;
+    }
+    return candidates.back();
+}
+
+void MatchEngine::EmitFeed(const std::string& text) {
+    if (!matchState || text.empty()) return;
+    std::ostringstream line;
+    line << "[Q" << matchState->quarterNumber << " " << FormatGameClock(matchState->timeRemaining) << "] ("
+         << matchState->homeScore << "-" << matchState->awayScore << ") " << text;
+    feedHistory.push_back(line.str());
+    ++feedTotal;
+    if (feedHistory.size() > 200) feedHistory.pop_front();
+    matchState->lastPlay = text;
+}
+
+void MatchEngine::DetermineEntry(PossessionPlan& plan, PossessionEnd prevEnd, const std::string& prevHolderId) {
+    plan.entry = PossessionEntry::Inbound;
+    plan.entryHolder = nullptr;
+
+    std::shared_ptr<Player> holder;
+    if (!prevHolderId.empty()) {
+        for (const auto& p : plan.onCourtOffense) {
+            if (p->playerId == prevHolderId) holder = p;
+        }
+    }
+
+    float fastBreakChance = 0.0f;
+    switch (prevEnd) {
+        case PossessionEnd::Steal:
+        case PossessionEnd::Turnover:
+            if (holder) {
+                plan.entry = PossessionEntry::LiveBall;
+                plan.entryHolder = holder;
+                fastBreakChance = (prevEnd == PossessionEnd::Steal) ? 0.60f : 0.30f;
+            }
+            break;
+        case PossessionEnd::DefensiveRebound:
+        case PossessionEnd::Block:
+            if (holder) {
+                plan.entry = PossessionEntry::Outlet;
+                plan.entryHolder = holder;
+                fastBreakChance = 0.20f;
+            }
+            break;
+        case PossessionEnd::OffensiveRebound:
+            if (holder) {
+                plan.entry = PossessionEntry::PutBack;
+                plan.entryHolder = holder;
+            }
+            break;
+        case PossessionEnd::MadeShot:
+            fastBreakChance = 0.04f;
+            break;
+        default:
+            break;
+    }
+
+    if (plan.entry == PossessionEntry::PutBack || fastBreakChance <= 0.0f) return;
+
+    auto offenseStrategy = plan.homeOffense ? tacticalManager->GetHomeOffensiveStrategy()
+                                            : tacticalManager->GetAwayOffensiveStrategy();
+    if (offenseStrategy == OffensiveStrategy::FAST_BREAK) fastBreakChance += 0.25f;
+    else if (offenseStrategy == OffensiveStrategy::PACE_AND_SPACE) fastBreakChance += 0.10f;
+
+    plan.fastBreak = RandomFloat() < fastBreakChance;
+}
+
+bool MatchEngine::PlanPossession(PossessionPlan& plan) {
+    if (!matchState || matchState->matchComplete) return false;
+
+    PossessionEnd prevEnd = lastEnd;
+    const std::string prevHolderId = lastBallHolderId;
 
     // Check if current quarter is out of time
     if (matchState->timeRemaining <= 0) {
         if (matchState->quarterNumber < 4) {
+            EmitFeed("End of quarter " + std::to_string(matchState->quarterNumber) + ".");
             AdvanceQuarter();
+            prevEnd = PossessionEnd::None;
         } else if (matchState->homeScore != matchState->awayScore) {
             matchState->matchComplete = true;
-            return 0;
+            EmitFeed("Final buzzer!");
+            return false;
         } else {
-            // Overtime
+            EmitFeed("Tied after regulation, overtime!");
             AdvanceQuarter();
+            prevEnd = PossessionEnd::None;
         }
     }
 
+    plan = PossessionPlan{};
     matchState->possessionCount++;
 
-    // Variable possession duration to drive pace (~12-20 seconds)
-    int durationSeconds = std::max(6, static_cast<int>(std::round(RandomFloatRange(12.0f, 20.0f))));
-    durationSeconds = std::min(durationSeconds, std::max(1, matchState->timeRemaining));
-
-    // Determine which team has ball
-    auto& offensiveTeam = matchState->homeTeamPossession ? matchState->homeTeam : matchState->awayTeam;
-    auto& defensiveTeam = matchState->homeTeamPossession ? matchState->awayTeam : matchState->homeTeam;
-
-    // Get players on court
-    std::vector<std::shared_ptr<Player>> onCourtOffense, onCourtDefense;
-    for (auto& p : offensiveTeam->roster) {
-        if (p->onCourt) onCourtOffense.push_back(p);
+    plan.homeOffense = matchState->homeTeamPossession;
+    plan.offense = plan.homeOffense ? matchState->homeTeam : matchState->awayTeam;
+    plan.defense = plan.homeOffense ? matchState->awayTeam : matchState->homeTeam;
+    for (auto& p : plan.offense->roster) {
+        if (p->onCourt) plan.onCourtOffense.push_back(p);
     }
-    for (auto& p : defensiveTeam->roster) {
-        if (p->onCourt) onCourtDefense.push_back(p);
+    for (auto& p : plan.defense->roster) {
+        if (p->onCourt) plan.onCourtDefense.push_back(p);
     }
 
-    if (onCourtOffense.empty() || onCourtDefense.empty()) {
-        return durationSeconds;
+    DetermineEntry(plan, prevEnd, prevHolderId);
+
+    // Variable possession duration to drive pace (~12-20 seconds); fast breaks and put-backs are quicker
+    int durationSeconds;
+    if (plan.fastBreak) {
+        durationSeconds = RandomInt(5, 9);
+    } else if (plan.entry == PossessionEntry::PutBack) {
+        durationSeconds = RandomInt(4, 9);
+    } else {
+        durationSeconds = std::max(6, static_cast<int>(std::round(RandomFloatRange(12.0f, 20.0f))));
+    }
+    plan.duration = std::min(durationSeconds, std::max(1, matchState->timeRemaining));
+
+    if (plan.onCourtOffense.empty() || plan.onCourtDefense.empty()) {
+        plan.end = PossessionEnd::None;
+        lastEnd = PossessionEnd::None;
+        lastBallHolderId.clear();
+        return true;
     }
 
-    // Pick random players
-    auto ballHandler = onCourtOffense[RandomInt(0, static_cast<int>(onCourtOffense.size()) - 1)];
-    auto defender = onCourtDefense[RandomInt(0, static_cast<int>(onCourtDefense.size()) - 1)];
-    auto passer = onCourtOffense[RandomInt(0, static_cast<int>(onCourtOffense.size()) - 1)];
-    if (passer == ballHandler && onCourtOffense.size() > 1) {
-        passer = onCourtOffense[(RandomInt(1, static_cast<int>(onCourtOffense.size()) - 1)) % onCourtOffense.size()];
+    auto& onCourtOffense = plan.onCourtOffense;
+    auto& onCourtDefense = plan.onCourtDefense;
+
+    // Usage: better shooters and ball handlers take more of the possessions
+    auto usageWeight = [&](const std::shared_ptr<Player>& p) {
+        float w = 1.0f + p->attributes.shooting * 0.9f + p->attributes.ballControl * 0.45f
+                  + p->attributes.technical * 0.2f + p->attributes.currentAbility * 0.03f;
+        w *= (1.0f - p->fatigueLevel * 0.4f);
+        const bool liveEntry = plan.fastBreak || plan.entry == PossessionEntry::PutBack;
+        if (liveEntry && plan.entryHolder && p == plan.entryHolder) w *= 2.5f;
+        return w;
+    };
+    auto ballHandler = PickWeighted(onCourtOffense, usageWeight);
+
+    // Mostly the matched defender, sometimes a help defender
+    std::shared_ptr<Player> defender;
+    if (RandomFloat() < 0.65f) {
+        auto offenseByRole = SortByRole(onCourtOffense);
+        auto defenseByRole = SortByRole(onCourtDefense);
+        for (size_t k = 0; k < offenseByRole.size() && k < defenseByRole.size(); ++k) {
+            if (offenseByRole[k] == ballHandler) defender = defenseByRole[k];
+        }
     }
+    if (!defender) {
+        defender = onCourtDefense[RandomInt(0, static_cast<int>(onCourtDefense.size()) - 1)];
+    }
+
+    // Passer: a playmaker other than the ball handler
+    std::vector<std::shared_ptr<Player>> teammates;
+    for (auto& p : onCourtOffense) {
+        if (p != ballHandler) teammates.push_back(p);
+    }
+    auto passer = teammates.empty()
+        ? ballHandler
+        : PickWeighted(teammates, [](const std::shared_ptr<Player>& p) {
+              return 1.0f + p->attributes.technical * 0.6f + p->attributes.ballControl * 0.6f;
+          });
+
+    plan.primary = ballHandler;
+    plan.defender = defender;
+    plan.passer = passer;
 
     // Tactical context
-    auto offenseStrategy = matchState->homeTeamPossession ? tacticalManager->GetHomeOffensiveStrategy()
-                                                          : tacticalManager->GetAwayOffensiveStrategy();
-    auto defenseStrategy = matchState->homeTeamPossession ? tacticalManager->GetAwayDefensiveStrategy()
-                                                          : tacticalManager->GetHomeDefensiveStrategy();
+    auto offenseStrategy = plan.homeOffense ? tacticalManager->GetHomeOffensiveStrategy()
+                                            : tacticalManager->GetAwayOffensiveStrategy();
+    auto defenseStrategy = plan.homeOffense ? tacticalManager->GetAwayDefensiveStrategy()
+                                            : tacticalManager->GetHomeDefensiveStrategy();
 
     float defensiveIntensity = tacticalManager->GetDefensiveIntensity(defenseStrategy);
     float offensiveRating = CalculatePlaySuccessRate(*ballHandler);
@@ -277,38 +415,38 @@ int MatchEngine::SimulatePossession() {
     float foulChance = 0.12f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.03f;
     float turnoverChance = 0.06f;
 
+    // Quick possessions leave little time for a pass to be picked off
+    if (plan.fastBreak) {
+        stealChance *= 0.5f;
+        turnoverChance *= 0.6f;
+    } else if (plan.entry == PossessionEntry::PutBack) {
+        stealChance *= 0.4f;
+        turnoverChance *= 0.5f;
+    }
+
     // Shot selection probabilities
     float threePointChance = tacticalManager->GetThreePointPercentage(offenseStrategy);
     if (ballHandler->position == Position::PG || ballHandler->position == Position::SG) {
         threePointChance += 0.05f;
     }
+    if (plan.fastBreak) threePointChance *= 0.5f;
     threePointChance = std::min(0.8f, std::max(0.1f, threePointChance));
 
     // Build log
     std::ostringstream oss;
-    std::string actionPhase = "dribble";
 
     float roll = RandomFloat();
-    float pointsScored = 0;
 
     if (roll < stealChance) {
         // Steal/turnover
-        actionPhase = "steal";
+        plan.end = PossessionEnd::Steal;
+        plan.actionPhase = "steal";
         oss << passer->firstName << " swings to " << ballHandler->lastName << ", stolen by "
             << defender->lastName << "!";
-        defender->stealsThisGame++;
-        ballHandler->turnoversThisGame++;
-        if (matchState->homeTeamPossession) {
-            matchState->homeTurnovers++;
-            matchState->awaySteals++;
-        } else {
-            matchState->awayTurnovers++;
-            matchState->homeSteals++;
-        }
-        matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else if (roll < stealChance + foulChance) {
         // Shooting foul leads to free throws
-        actionPhase = "foul";
+        plan.end = PossessionEnd::ShootingFoul;
+        plan.actionPhase = "foul";
         float ftPct = std::clamp(0.72f + (ballHandler->attributes.shooting / 20.0f) * 0.1f, 0.6f, 0.9f);
         int attempts = 2;
         // Occasional and-1 or three-shot foul
@@ -317,106 +455,211 @@ int MatchEngine::SimulatePossession() {
         for (int i = 0; i < attempts; ++i) {
             if (RandomFloat() < ftPct) made++;
         }
-        pointsScored = static_cast<float>(made);
+        plan.ftAttempts = attempts;
+        plan.ftMade = made;
         oss << ballHandler->firstName << " " << ballHandler->lastName << " fouled by "
             << defender->lastName << " - hits " << made << "/" << attempts << " at the line.";
-        if (matchState->homeTeamPossession) {
-            matchState->awayFouls++;
-            matchState->homeScore += pointsScored;
-        } else {
-            matchState->homeFouls++;
-            matchState->awayScore += pointsScored;
-        }
-        defender->foulsThisGame++;
-        ballHandler->pointsThisGame += pointsScored;
-        matchState->lastScorer = ballHandler;
-        matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else if (roll < stealChance + foulChance + turnoverChance) {
         // Unforced turnover
-        actionPhase = "turnover";
+        plan.end = PossessionEnd::Turnover;
+        plan.actionPhase = "turnover";
         oss << ballHandler->firstName << " " << ballHandler->lastName << " loses the handle (turnover).";
-        ballHandler->turnoversThisGame++;
-        if (matchState->homeTeamPossession) {
-            matchState->homeTurnovers++;
-        } else {
-            matchState->awayTurnovers++;
-        }
-        matchState->homeTeamPossession = !matchState->homeTeamPossession;
     } else {
         // Shot attempt
-        actionPhase = "shot";
-        bool isThree = (RandomFloat() < threePointChance);
+        plan.actionPhase = "shot";
+        plan.isThree = (RandomFloat() < threePointChance);
         float base2pt = 0.44f + (ballHandler->attributes.shooting / 20.0f) * 0.14f;
         base2pt *= (1.0f + (ballHandler->attributes.technical / 20.0f) * 0.05f);
         float fg2 = std::clamp(base2pt * (offensiveRating / 0.5f) * (1.0f - defensiveRating * 0.15f)
                                * (1.0f - ballHandler->fatigueLevel * 0.2f), 0.35f, 0.7f);
+        // Open-floor finishes are easier
+        if (plan.fastBreak && !plan.isThree) fg2 = std::min(0.75f, fg2 * 1.10f);
         float fg3 = std::clamp(fg2 - 0.08f, 0.26f, 0.55f);
-        float shotMakeProb = isThree ? fg3 : fg2;
+        float shotMakeProb = plan.isThree ? fg3 : fg2;
 
         float blockChance = std::clamp(0.04f + defensiveIntensity * 0.03f, 0.02f, 0.12f);
 
         if (RandomFloat() < blockChance) {
             // Blocked shot -> defensive rebound
-            actionPhase = "block";
+            plan.end = PossessionEnd::Block;
+            plan.actionPhase = "block";
             oss << defender->lastName << " rejects " << ballHandler->lastName << "!";
-            defender->blocksThisGame++;
-            defender->reboundsThisGame++;
-            matchState->lastRebounder = defender;
-            if (matchState->homeTeamPossession) {
-                matchState->awayBlocks++;
-                matchState->awayRebounds++;
-            } else {
-                matchState->homeBlocks++;
-                matchState->homeRebounds++;
-            }
-            matchState->homeTeamPossession = !matchState->homeTeamPossession;
         } else if (RandomFloat() < shotMakeProb) {
-            actionPhase = isThree ? "three_make" : "shot_make";
-            pointsScored = isThree ? 3.0f : 2.0f;
-            oss << passer->firstName << " finds " << ballHandler->lastName << " for "
-                << (isThree ? "a 3!" : "two!");
-            if (matchState->homeTeamPossession) {
-                matchState->homeScore += pointsScored;
+            plan.end = PossessionEnd::MadeShot;
+            plan.actionPhase = plan.isThree ? "three_make" : "shot_make";
+            plan.assisted = onCourtOffense.size() > 1 && RandomFloat() < (plan.isThree ? 0.82f : 0.58f);
+            if (plan.assisted) {
+                oss << passer->firstName << " finds " << ballHandler->lastName << " for "
+                    << (plan.isThree ? "a 3!" : "two!");
             } else {
-                matchState->awayScore += pointsScored;
+                oss << ballHandler->lastName << " scores " << (plan.isThree ? "a 3!" : "two!");
             }
-            ballHandler->pointsThisGame += pointsScored;
-            matchState->lastScorer = ballHandler;
-            matchState->homeTeamPossession = !matchState->homeTeamPossession;
         } else {
             // Missed shot
-            actionPhase = "miss";
+            plan.actionPhase = "miss";
             float offensiveRebChance = std::clamp(0.27f - (defensiveIntensity - 1.0f) * 0.06f, 0.18f, 0.32f);
             bool offensiveRebound = (RandomFloat() < offensiveRebChance);
 
             if (offensiveRebound) {
-                auto rebounder = onCourtOffense[RandomInt(0, static_cast<int>(onCourtOffense.size()) - 1)];
-                rebounder->reboundsThisGame++;
-                matchState->lastRebounder = rebounder;
-                if (matchState->homeTeamPossession) {
-                    matchState->homeRebounds++;
-                } else {
-                    matchState->awayRebounds++;
-                }
-                oss << ballHandler->lastName << " misses, " << rebounder->lastName << " with the offensive board.";
+                plan.end = PossessionEnd::OffensiveRebound;
+                plan.rebounder = PickWeighted(onCourtOffense, [](const std::shared_ptr<Player>& p) {
+                    return 1.0f + p->attributes.physical;
+                });
+                oss << ballHandler->lastName << " misses, " << plan.rebounder->lastName << " with the offensive board.";
             } else {
-                defender->reboundsThisGame++;
-                matchState->lastRebounder = defender;
-                if (matchState->homeTeamPossession) {
-                    matchState->awayRebounds++;
-                } else {
-                    matchState->homeRebounds++;
-                }
-                oss << ballHandler->lastName << " misses, rebound " << defender->lastName << ".";
-                matchState->homeTeamPossession = !matchState->homeTeamPossession;
+                plan.end = PossessionEnd::DefensiveRebound;
+                // Bigger, stronger defenders win more of the boards
+                plan.defender = PickWeighted(onCourtDefense, [](const std::shared_ptr<Player>& p) {
+                    return 1.0f + p->attributes.physical;
+                });
+                oss << ballHandler->lastName << " misses, rebound " << plan.defender->lastName << ".";
             }
         }
     }
 
-    matchState->lastPlay = oss.str();
+    plan.summary = oss.str();
+
+    // Remember how this possession ended so the next one can start from the right place
+    lastEnd = plan.end;
+    switch (plan.end) {
+        case PossessionEnd::Steal:
+        case PossessionEnd::Turnover:
+        case PossessionEnd::Block:
+        case PossessionEnd::DefensiveRebound:
+            lastBallHolderId = plan.defender ? plan.defender->playerId : std::string();
+            break;
+        case PossessionEnd::OffensiveRebound:
+            lastBallHolderId = plan.rebounder ? plan.rebounder->playerId : std::string();
+            break;
+        default:
+            lastBallHolderId.clear();
+            break;
+    }
+    return true;
+}
+
+void MatchEngine::FlipPossession(const PossessionPlan& plan) {
+    matchState->homeTeamPossession = !plan.homeOffense;
+}
+
+void MatchEngine::ApplyScore(const PossessionPlan& plan, int points) {
+    if (plan.homeOffense) {
+        matchState->homeScore += points;
+    } else {
+        matchState->awayScore += points;
+    }
+    plan.primary->pointsThisGame += points;
+    matchState->lastScorer = plan.primary;
+}
+
+void MatchEngine::ApplyFoul(const PossessionPlan& plan) {
+    if (plan.homeOffense) {
+        matchState->awayFouls++;
+    } else {
+        matchState->homeFouls++;
+    }
+    plan.defender->foulsThisGame++;
+}
+
+void MatchEngine::ApplyTurnover(const PossessionPlan& plan, bool steal) {
+    if (steal) plan.defender->stealsThisGame++;
+    plan.primary->turnoversThisGame++;
+    if (plan.homeOffense) {
+        matchState->homeTurnovers++;
+        if (steal) matchState->awaySteals++;
+    } else {
+        matchState->awayTurnovers++;
+        if (steal) matchState->homeSteals++;
+    }
+    FlipPossession(plan);
+}
+
+void MatchEngine::ApplyBlock(const PossessionPlan& plan) {
+    plan.defender->blocksThisGame++;
+    plan.defender->reboundsThisGame++;
+    matchState->lastRebounder = plan.defender;
+    if (plan.homeOffense) {
+        matchState->awayBlocks++;
+        matchState->awayRebounds++;
+    } else {
+        matchState->homeBlocks++;
+        matchState->homeRebounds++;
+    }
+    FlipPossession(plan);
+}
+
+void MatchEngine::ApplyRebound(const PossessionPlan& plan, bool offensive) {
+    if (offensive) {
+        plan.rebounder->reboundsThisGame++;
+        matchState->lastRebounder = plan.rebounder;
+        if (plan.homeOffense) {
+            matchState->homeRebounds++;
+        } else {
+            matchState->awayRebounds++;
+        }
+        return;
+    }
+
+    plan.defender->reboundsThisGame++;
+    matchState->lastRebounder = plan.defender;
+    if (plan.homeOffense) {
+        matchState->awayRebounds++;
+    } else {
+        matchState->homeRebounds++;
+    }
+    FlipPossession(plan);
+}
+
+// Applies the whole possession at once (console and background simulation)
+void MatchEngine::ApplyOutcome(const PossessionPlan& plan) {
+    switch (plan.end) {
+        case PossessionEnd::Steal:
+            ApplyTurnover(plan, true);
+            break;
+        case PossessionEnd::Turnover:
+            ApplyTurnover(plan, false);
+            break;
+        case PossessionEnd::ShootingFoul:
+            ApplyFoul(plan);
+            ApplyScore(plan, plan.ftMade);
+            FlipPossession(plan);
+            break;
+        case PossessionEnd::Block:
+            ApplyBlock(plan);
+            break;
+        case PossessionEnd::MadeShot:
+            ApplyScore(plan, plan.isThree ? 3 : 2);
+            if (plan.assisted && plan.passer) plan.passer->assistsThisGame++;
+            FlipPossession(plan);
+            break;
+        case PossessionEnd::OffensiveRebound:
+            ApplyRebound(plan, true);
+            break;
+        case PossessionEnd::DefensiveRebound:
+            ApplyRebound(plan, false);
+            break;
+        case PossessionEnd::None:
+            break;
+    }
+}
+
+int MatchEngine::SimulatePossession() {
+    PossessionPlan plan;
+    if (!PlanPossession(plan)) return 0;
+
+    if (plan.end == PossessionEnd::None) {
+        // No lineup on the floor: still run the clock so the match can finish
+        matchState->timeRemaining = std::max(0, matchState->timeRemaining - plan.duration);
+        matchState->timeElapsed += plan.duration;
+        return plan.duration;
+    }
+
+    ApplyOutcome(plan);
+    const int durationSeconds = plan.duration;
+    matchState->lastPlay = plan.summary;
 
     // Update spatial player/ball coordinates for 2D/3D visualization
-    UpdateSpatialState(ballHandler, defender, actionPhase);
+    UpdateSpatialState(plan.primary, plan.defender, plan.actionPhase);
 
     // Deduct possession time
     matchState->timeRemaining -= durationSeconds;
@@ -445,7 +688,7 @@ int MatchEngine::SimulatePossession() {
 
     // Optional pacing delay based on speed multiplier (skip delay if speedMultiplier <= 0 or for background sim >= 6)
     int baseDelayMs = 400;
-    if (speedMultiplier > 0 && speedMultiplier < 6) {
+    if (!headless && speedMultiplier > 0 && speedMultiplier < 6) {
         std::this_thread::sleep_for(std::chrono::milliseconds(baseDelayMs / speedMultiplier));
     }
 
@@ -953,6 +1196,16 @@ void MatchEngine::CallTimeout(bool isHomeTeam) {
     }
     
     timeouts--;
+
+    if (headless) {
+        // UI path: no console prompts; the caller handles any substitutions
+        auto timeoutTeam = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+        for (auto& p : timeoutTeam->roster) {
+            if (p->onCourt) p->fatigueLevel = std::max(0.0f, p->fatigueLevel - 0.05f);
+        }
+        EmitFeed(teamName + " call a timeout (" + std::to_string(timeouts) + " left).");
+        return;
+    }
     
     std::cout << "\n╔════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                        ⏱️  TIMEOUT CALLED                       ║\n";
@@ -1028,7 +1281,9 @@ void MatchEngine::CallTimeout(bool isHomeTeam) {
     }
     
     std::cout << "\n[Timeout complete - Resuming play...]\n\n";
-    std::this_thread::sleep_for(std::chrono::milliseconds(500 / speedMultiplier));
+    if (!headless && speedMultiplier > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500 / speedMultiplier));
+    }
 }
 
 void MatchEngine::ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout) {
@@ -1103,7 +1358,10 @@ void MatchEngine::ApplyCoachingCallout(bool isHomeTeam, CoachingCallout callout)
               << "  ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
     
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000 / speedMultiplier));
+    if (!headless && speedMultiplier > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / speedMultiplier));
+    }
+    EmitFeed(teamName + " coach: " + calloutText);
 }
 
 void MatchEngine::UpdateSpatialState(const std::shared_ptr<Player>& ballHandler,
@@ -1279,6 +1537,844 @@ void MatchEngine::UpdateSpatialState(const std::shared_ptr<Player>& ballHandler,
         matchState->ball.z = 8.0f;
         matchState->ball.inFlight = true;
     }
+}
+
+// ============================================================================
+// Live second-by-second playback
+//
+// A planned possession is turned into a queue of "beats" (inbound, advance, passes, drive, shot,
+// rebound ...). StepSecond() plays one game second of the current beat: players walk towards the
+// beat's destinations, the ball follows its holder or flies to the next one, and the clock runs.
+// Score and stats only change when the beat that decides them completes.
+// ============================================================================
+
+namespace {
+
+constexpr float kLeftHoopX = 5.25f;
+constexpr float kRightHoopX = 88.75f;
+constexpr float kHoopY = 25.0f;
+
+struct Slot {
+    float dx;  // feet from the attacked hoop towards midcourt
+    float y;
+};
+
+constexpr Slot kMotionSlots[5] = {{27, 25}, {22, 9}, {22, 41}, {13, 19}, {7, 29}};
+constexpr Slot kFourOutSlots[5] = {{27, 25}, {23, 8}, {23, 42}, {4, 3}, {8, 27}};
+constexpr Slot kInsideSlots[5] = {{22, 25}, {17, 12}, {17, 38}, {11, 25}, {5, 22}};
+constexpr Slot kZone23[5] = {{16, 19}, {16, 31}, {9, 10}, {9, 40}, {4, 25}};
+constexpr Slot kZone32[5] = {{17, 12}, {17, 25}, {17, 38}, {7, 18}, {7, 32}};
+
+using Moves = std::unordered_map<std::string, CourtPoint>;
+
+float Clampf(float v, float lo, float hi) {
+    return std::min(hi, std::max(lo, v));
+}
+
+CourtPoint ClampToCourt(CourtPoint p) {
+    return CourtPoint{Clampf(p.x, 1.5f, 92.5f), Clampf(p.y, 1.5f, 48.5f)};
+}
+
+float Jit(float range) {
+    return RandomFloatRange(-range, range);
+}
+
+const char* PickText(std::initializer_list<const char*> options) {
+    const int index = RandomInt(0, static_cast<int>(options.size()) - 1);
+    return *(options.begin() + index);
+}
+
+std::string Fill(const char* tpl, const std::string& a, const std::string& b = std::string()) {
+    std::string s(tpl);
+    auto replaceAll = [&s](const std::string& token, const std::string& value) {
+        size_t pos = 0;
+        while ((pos = s.find(token, pos)) != std::string::npos) {
+            s.replace(pos, token.size(), value);
+            pos += value.size();
+        }
+    };
+    replaceAll("{A}", a);
+    replaceAll("{B}", b);
+    return s;
+}
+
+const Slot* OffenseSlots(OffensiveStrategy strategy) {
+    switch (strategy) {
+        case OffensiveStrategy::THREE_POINT_HEAVY:
+        case OffensiveStrategy::PACE_AND_SPACE:
+            return kFourOutSlots;
+        case OffensiveStrategy::INSIDE_FOCUSED:
+            return kInsideSlots;
+        default:
+            return kMotionSlots;
+    }
+}
+
+std::string PassText(const std::shared_ptr<Player>& from, const std::shared_ptr<Player>& to) {
+    const bool inside = to->position == Position::C || to->position == Position::PF;
+    if (inside && RandomFloat() < 0.6f) {
+        return Fill(PickText({"{A} feeds {B} inside.", "{A} looks inside to {B}.", "{A} drops it to {B} in the post."}),
+                    from->lastName, to->lastName);
+    }
+    return Fill(PickText({"{A} swings it to {B}.", "{A} finds {B} on the wing.", "{A} kicks it out to {B}.",
+                          "{A} moves the ball to {B}.", "{A} hits {B} on the move."}),
+                from->lastName, to->lastName);
+}
+
+} // namespace
+
+void MatchEngine::RebuildCourtRoster() {
+    std::vector<CourtPlayerState> next;
+    actorById.clear();
+
+    auto addTeam = [&](const std::shared_ptr<Team>& team, bool isHome) {
+        int count = 0;
+        for (const auto& p : team->roster) {
+            if (!p || !p->onCourt) continue;
+            if (count++ >= 5) break;
+
+            CourtPlayerState cp;
+            bool found = false;
+            for (const auto& previous : matchState->courtPlayers) {
+                if (previous.playerId == p->playerId) {
+                    cp = previous;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                // Substitutes walk in from the sideline
+                cp.x = 47.0f;
+                cp.y = isHome ? 1.5f : 48.5f;
+                cp.action = "idle";
+            }
+            cp.playerId = p->playerId;
+            cp.name = p->firstName + " " + p->lastName;
+            cp.teamId = team->teamId;
+            cp.isHome = isHome;
+            cp.position = p->position;
+            cp.jerseyNumber = p->jerseyNumber;
+            cp.hasBall = false;
+            next.push_back(cp);
+            actorById[p->playerId] = p;
+        }
+    };
+
+    addTeam(matchState->homeTeam, true);
+    addTeam(matchState->awayTeam, false);
+    matchState->courtPlayers = std::move(next);
+}
+
+void MatchEngine::BuildScript(const PossessionPlan& plan) {
+    beatQueue.clear();
+    beatActive = false;
+    RebuildCourtRoster();
+
+    const bool homeOff = plan.homeOffense;
+    const float hoopX = homeOff ? kRightHoopX : kLeftHoopX;
+    const float dir = homeOff ? -1.0f : 1.0f;             // from the attacked hoop towards midcourt
+    const float ownHoopX = homeOff ? kLeftHoopX : kRightHoopX;
+    const float ownDir = -dir;                            // from the own hoop towards midcourt
+    const CourtPoint hoop{hoopX, kHoopY};
+    const PossessionEnd end = plan.end;
+
+    const auto& off = plan.onCourtOffense;
+    const auto offStrategy = homeOff ? tacticalManager->GetHomeOffensiveStrategy()
+                                     : tacticalManager->GetAwayOffensiveStrategy();
+    const auto defStrategy = homeOff ? tacticalManager->GetAwayDefensiveStrategy()
+                                     : tacticalManager->GetHomeDefensiveStrategy();
+    const Slot* slots = OffenseSlots(offStrategy);
+    const bool zone = defStrategy == DefensiveStrategy::ZONE_2_3 || defStrategy == DefensiveStrategy::ZONE_3_2;
+    const bool pressure = defStrategy == DefensiveStrategy::PRESS || defStrategy == DefensiveStrategy::MAN_TO_MAN;
+
+    // Where everybody is now, and where the beats queued so far will leave them
+    std::unordered_map<std::string, CourtPoint> here;
+    for (const auto& cp : matchState->courtPlayers) here[cp.playerId] = CourtPoint{cp.x, cp.y};
+    Moves planned;
+    auto posOf = [&](const std::string& id) {
+        auto it = planned.find(id);
+        if (it != planned.end()) return it->second;
+        auto h = here.find(id);
+        return h != here.end() ? h->second : CourtPoint{47.0f, 25.0f};
+    };
+
+    // Floor spots by role and defensive matchups
+    const auto offOrder = SortByRole(plan.onCourtOffense);
+    const auto defOrder = SortByRole(plan.onCourtDefense);
+    Moves spot;
+    std::unordered_map<std::string, std::string> guardOf;  // offensive player id -> his defender
+    for (size_t k = 0; k < offOrder.size() && k < 5; ++k) {
+        spot[offOrder[k]->playerId] = CourtPoint{hoopX + dir * slots[k].dx, slots[k].y};
+        if (k < defOrder.size()) guardOf[offOrder[k]->playerId] = defOrder[k]->playerId;
+    }
+
+    auto placeDefense = [&](Moves& dest, const std::string& holderId) {
+        if (zone) {
+            const Slot* z = (defStrategy == DefensiveStrategy::ZONE_3_2) ? kZone32 : kZone23;
+            float holderY = kHoopY;
+            auto holder = dest.find(holderId);
+            if (holder != dest.end()) holderY = holder->second.y;
+            const float shift = 0.35f * (holderY - kHoopY);
+            for (size_t k = 0; k < defOrder.size() && k < 5; ++k) {
+                dest[defOrder[k]->playerId] = ClampToCourt(CourtPoint{hoopX + dir * z[k].dx, z[k].y + shift});
+            }
+            return;
+        }
+        for (const auto& o : off) {
+            auto guard = guardOf.find(o->playerId);
+            if (guard == guardOf.end()) continue;
+            auto where = dest.find(o->playerId);
+            const CourtPoint op = (where != dest.end()) ? where->second : posOf(o->playerId);
+            const float tx = hoop.x - op.x;
+            const float ty = hoop.y - op.y;
+            const float dist = std::max(0.1f, std::hypot(tx, ty));
+            const bool onBall = (o->playerId == holderId);
+            float gap = onBall ? (pressure ? 2.0f : 3.0f) : (pressure ? 3.5f : 4.5f + 0.08f * dist);
+            gap = std::min(gap, std::max(0.0f, dist - 2.0f));
+            dest[guard->second] = ClampToCourt(CourtPoint{op.x + tx / dist * gap, op.y + ty / dist * gap});
+        }
+    };
+
+    auto setSpots = [&](Moves& dest, float jitter) {
+        for (const auto& o : off) {
+            auto it = spot.find(o->playerId);
+            if (it == spot.end()) continue;
+            dest[o->playerId] = ClampToCourt(CourtPoint{it->second.x + Jit(jitter), it->second.y + Jit(jitter)});
+        }
+    };
+
+    auto rimPoint = [&](float minFt, float maxFt, float yRange) {
+        return ClampToCourt(CourtPoint{hoopX + dir * RandomFloatRange(minFt, maxFt), kHoopY + Jit(yRange)});
+    };
+
+    // Half-court movement: spacing shifts (two players trade spots for good), sometimes a cutter slices to the rim
+    auto setMoves = [&](const std::string& fromId, const std::string& toId, bool allowCut) {
+        std::vector<std::string> free;
+        for (const auto& o : off) {
+            if (o->playerId != fromId && o->playerId != toId) free.push_back(o->playerId);
+        }
+        if (free.size() >= 2 && RandomFloat() < 0.45f) {
+            const int a = RandomInt(0, static_cast<int>(free.size()) - 1);
+            int b = RandomInt(0, static_cast<int>(free.size()) - 2);
+            if (b >= a) ++b;
+            if (spot.count(free[static_cast<size_t>(a)]) && spot.count(free[static_cast<size_t>(b)])) {
+                std::swap(spot[free[static_cast<size_t>(a)]], spot[free[static_cast<size_t>(b)]]);
+            }
+        }
+
+        Moves mv;
+        setSpots(mv, 2.0f);
+        if (allowCut && !free.empty() && RandomFloat() < 0.4f) {
+            mv[free[static_cast<size_t>(RandomInt(0, static_cast<int>(free.size()) - 1))]] = rimPoint(3.0f, 6.0f, 8.0f);
+        }
+        placeDefense(mv, toId);
+        return mv;
+    };
+
+    auto makeBeat = [&](const char* phase, int seconds, bool clockRuns, float speed) {
+        PossessionBeat b;
+        b.phase = phase;
+        b.seconds = std::max(1, seconds);
+        b.clockRuns = clockRuns;
+        b.speedFactor = speed;
+        b.hoop = hoop;
+        return b;
+    };
+
+    auto pushBeat = [&](PossessionBeat&& b) {
+        for (const auto& kv : b.moves) planned[kv.first] = kv.second;
+        beatQueue.push_back(std::move(b));
+    };
+
+    // ----- Who touches the ball, and how much time there is for each phase -----
+    const std::shared_ptr<Player> finalHolder = (end == PossessionEnd::Steal) ? plan.passer : plan.primary;
+    const std::shared_ptr<Player> forced = plan.entryHolder;  // already has the ball when the possession starts
+    const std::string& finalId = finalHolder->playerId;
+
+    const bool reboundEnd = (end == PossessionEnd::DefensiveRebound || end == PossessionEnd::OffensiveRebound);
+    const bool shotEnd = (end == PossessionEnd::MadeShot || end == PossessionEnd::ShootingFoul ||
+                          end == PossessionEnd::Block || reboundEnd);
+    const bool merged = reboundEnd && plan.duration < 2;  // not enough clock for a separate rebound beat
+    const int tail = (reboundEnd && !merged) ? 2 : 1;
+    const int lead = std::max(0, plan.duration - tail);
+
+    const bool inboundBeats = (plan.entry == PossessionEntry::Inbound) && lead >= 1;
+    int afterEntry = lead - (inboundBeats ? 1 : 0);
+
+    const bool outlet = plan.entry == PossessionEntry::Outlet && !plan.fastBreak && forced && forced != finalHolder &&
+                        afterEntry >= 2;
+    if (outlet) afterEntry -= 1;
+
+    int advance = 0;
+    if (plan.entry != PossessionEntry::PutBack && afterEntry >= 1) {
+        if (plan.fastBreak) {
+            // A break is one long sprint; keep a second back only when the ball has to be passed ahead first
+            const bool needsPass = forced && forced != finalHolder && afterEntry >= 2;
+            advance = afterEntry - (needsPass ? 1 : 0);
+        } else {
+            advance = std::min(RandomInt(3, 5), afterEntry);
+        }
+    }
+    const int rem = afterEntry - advance;
+
+    const bool drive = shotEnd && !plan.isThree && !plan.fastBreak && rem >= 3 &&
+                       RandomFloat() < (finalHolder->attributes.ballControl >= 11 ? 0.6f : 0.25f);
+    const int driveSecs = drive ? 2 : 0;
+    const int mMax = std::max(0, rem - driveSecs);
+
+    // More ball movement when there is more time: roughly one pass per three seconds of half-court play
+    int desired;
+    if (end == PossessionEnd::Steal) {
+        desired = RandomInt(0, std::max(1, rem / 4));
+    } else if (plan.fastBreak) {
+        desired = RandomInt(0, 1);
+    } else {
+        desired = std::min(6, RandomInt(std::max(1, rem / 4), std::max(1, (rem * 2) / 5)));
+    }
+    int mExtra = std::min(desired, mMax);
+    if (!outlet && forced && forced != finalHolder && mExtra == 0 && mMax >= 1) mExtra = 1;
+    if (forced && forced == finalHolder) mExtra = 0;  // he already has it
+    const int m = (outlet ? 1 : 0) + mExtra;          // completed passes before the final action
+
+    // ----- Chain of ball holders: holders[0] starts, holders[m] makes the final action -----
+    auto bestHandlerExcluding = [&](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {
+        std::shared_ptr<Player> best;
+        for (const auto& p : off) {
+            if (p == a || p == b) continue;
+            if (!best || p->attributes.ballControl > best->attributes.ballControl) best = p;
+        }
+        return best;
+    };
+
+    std::vector<std::shared_ptr<Player>> holders(static_cast<size_t>(m) + 1, finalHolder);
+    if (m >= 1) {
+        std::shared_ptr<Player> start = (forced && forced != finalHolder) ? forced : bestHandlerExcluding(finalHolder, nullptr);
+        holders[0] = start ? start : finalHolder;
+        for (int k = 1; k < m; ++k) {
+            std::shared_ptr<Player> pick;
+            if (k == 1 && outlet) {
+                pick = bestHandlerExcluding(holders[0], finalHolder);
+            } else {
+                std::vector<std::shared_ptr<Player>> options;
+                for (const auto& p : off) {
+                    if (p != holders[static_cast<size_t>(k) - 1] && p != finalHolder) options.push_back(p);
+                }
+                if (!options.empty()) pick = options[RandomInt(0, static_cast<int>(options.size()) - 1)];
+            }
+            holders[static_cast<size_t>(k)] = pick ? pick : holders[static_cast<size_t>(k) - 1];
+        }
+    }
+    const size_t startIdx = outlet ? 1 : 0;
+    const std::shared_ptr<Player> assister = (end == PossessionEnd::MadeShot && plan.assisted && m >= 1)
+        ? holders[static_cast<size_t>(m) - 1] : nullptr;
+
+    const PossessionPlan planCopy = plan;  // captured by the completion handlers below
+
+    // ----- Inbound (clock stopped, then the inbound pass) -----
+    if (inboundBeats) {
+        std::vector<std::shared_ptr<Player>> options;
+        for (const auto& p : off) {
+            if (p != holders[0]) options.push_back(p);
+        }
+        std::shared_ptr<Player> inbounder = options.empty() ? holders[0] : PickWeighted(options, [](const std::shared_ptr<Player>& p) {
+            return (p->position == Position::C || p->position == Position::PF) ? 3.0f : 1.0f;
+        });
+
+        PossessionBeat reset = makeBeat("inbound", 2, false, 1.0f);
+        reset.moves[inbounder->playerId] = CourtPoint{ownHoopX - ownDir * 4.5f, kHoopY};
+        reset.moves[holders[0]->playerId] = ClampToCourt(CourtPoint{ownHoopX + ownDir * 12.0f, kHoopY + Jit(6.0f)});
+        int lane = 0;
+        for (const auto& o : off) {
+            if (o == inbounder || o == holders[0]) continue;
+            reset.moves[o->playerId] = ClampToCourt(CourtPoint{ownHoopX + ownDir * (16.0f + 6.0f * lane),
+                                                               12.0f + 13.0f * (lane % 3) + Jit(2.0f)});
+            ++lane;
+        }
+        placeDefense(reset.moves, holders[0]->playerId);
+        reset.ballTo = inbounder->playerId;
+        pushBeat(std::move(reset));
+
+        PossessionBeat inPass = makeBeat("pass", 1, true, 0.8f);
+        setSpots(inPass.moves, 1.0f);
+        placeDefense(inPass.moves, holders[0]->playerId);
+        inPass.ballFrom = inbounder->playerId;
+        inPass.ballTo = holders[0]->playerId;
+        inPass.startText = Fill("{A} inbounds to {B}.", inbounder->lastName, holders[0]->lastName);
+        pushBeat(std::move(inPass));
+    }
+
+    // ----- Outlet pass to the ball handler after a rebound -----
+    if (outlet) {
+        PossessionBeat ob = makeBeat("pass", 1, true, 0.9f);
+        setSpots(ob.moves, 1.0f);
+        placeDefense(ob.moves, holders[1]->playerId);
+        ob.ballFrom = holders[0]->playerId;
+        ob.ballTo = holders[1]->playerId;
+        ob.startText = Fill("{A} outlets to {B}.", holders[0]->lastName, holders[1]->lastName);
+        pushBeat(std::move(ob));
+    }
+
+    // ----- Bringing the ball up the floor, or a fast break -----
+    const std::shared_ptr<Player>& carrier = holders[startIdx];
+    if (advance >= 1) {
+        PossessionBeat adv = makeBeat("advance", advance, true, plan.fastBreak ? 1.0f : 0.8f);
+        if (plan.fastBreak) {
+            // Handler down the middle, the quickest teammates fill the wings, the rest trail
+            std::vector<std::shared_ptr<Player>> others;
+            for (const auto& p : off) {
+                if (p != carrier) others.push_back(p);
+            }
+            std::sort(others.begin(), others.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {
+                return a->attributes.pace > b->attributes.pace;
+            });
+            const CourtPoint lanes[4] = {{hoopX + dir * 11.0f, 9.0f}, {hoopX + dir * 11.0f, 41.0f},
+                                         {hoopX + dir * 21.0f, 18.0f}, {hoopX + dir * 23.0f, 32.0f}};
+            adv.moves[carrier->playerId] = ClampToCourt(CourtPoint{hoopX + dir * 14.0f, kHoopY});
+            for (size_t k = 0; k < others.size() && k < 4; ++k) {
+                adv.moves[others[k]->playerId] = ClampToCourt(CourtPoint{lanes[k].x + Jit(1.5f), lanes[k].y + Jit(2.0f)});
+            }
+            adv.startText = Fill(PickText({"{A} pushes it up the floor!", "{A} is off to the races!", "{A} leads the break!"}),
+                                 carrier->lastName);
+        } else {
+            setSpots(adv.moves, 1.0f);
+            if (RandomFloat() < 0.6f) {
+                adv.startText = Fill(PickText({"{A} brings the ball up.", "{A} walks it up the floor.",
+                                               "{A} calls the set."}), carrier->lastName);
+            }
+        }
+        placeDefense(adv.moves, carrier->playerId);
+        adv.ballFrom = adv.ballTo = carrier->playerId;
+        pushBeat(std::move(adv));
+    }
+
+    // ----- Half-court ball movement (probing dribbles when no pass is needed), then the drive -----
+    const int passBeats = m - static_cast<int>(startIdx);
+    const int extras = std::max(0, rem - driveSecs - passBeats);
+    std::vector<int> passSecs(static_cast<size_t>(std::max(0, m)), 1);
+    int probe = 0;
+    if (extras > 0) {
+        if (passBeats <= 0) {
+            probe = extras;
+        } else {
+            for (int e = 0; e < extras; ++e) {
+                passSecs[startIdx + static_cast<size_t>(RandomInt(0, passBeats - 1))]++;
+            }
+        }
+    }
+
+    // Dribbling and off-ball movement in short bursts, each with fresh spacing
+    auto pushSetBeats = [&](const std::shared_ptr<Player>& holder, int seconds) {
+        int left = seconds;
+        while (left > 0) {
+            const int chunk = std::min(left, RandomInt(2, 3));
+            PossessionBeat sb = makeBeat("set", chunk, true, 0.6f);
+            sb.moves = setMoves(holder->playerId, holder->playerId, true);
+            sb.ballFrom = sb.ballTo = holder->playerId;
+            if (RandomFloat() < 0.35f) {
+                sb.startText = Fill(PickText({"{A} works the dribble.", "{A} probes the defense.", "{A} sizes up his man."}),
+                                    holder->lastName);
+            }
+            pushBeat(std::move(sb));
+            left -= chunk;
+        }
+    };
+
+    if (probe > 0) pushSetBeats(carrier, probe);
+
+    for (size_t k = startIdx; k < static_cast<size_t>(m); ++k) {
+        if (passSecs[k] > 1) pushSetBeats(holders[k], passSecs[k] - 1);
+
+        PossessionBeat pb = makeBeat("pass", 1, true, 0.7f);
+        pb.moves = setMoves(holders[k]->playerId, holders[k + 1]->playerId, true);
+        pb.ballFrom = holders[k]->playerId;
+        pb.ballTo = holders[k + 1]->playerId;
+        pb.startText = PassText(holders[k], holders[k + 1]);
+        pushBeat(std::move(pb));
+    }
+
+    if (driveSecs > 0) {
+        PossessionBeat db = makeBeat("drive", driveSecs, true, 0.95f);
+        setSpots(db.moves, 1.0f);
+        db.moves[finalId] = rimPoint(5.0f, 8.0f, 5.0f);
+        placeDefense(db.moves, finalId);
+        db.ballFrom = db.ballTo = finalId;
+        db.startText = Fill(PickText({"{A} attacks the rim!", "{A} drives to the basket.", "{A} blows by his man!"}),
+                            finalHolder->lastName);
+        pushBeat(std::move(db));
+    }
+
+    // ----- Final action -----
+    const std::string shooterName = finalHolder->lastName;
+    const std::string defenderName = plan.defender ? plan.defender->lastName : std::string();
+    const bool layup = !plan.isThree && (driveSecs > 0 || plan.fastBreak);
+
+    auto shotStartText = [&]() {
+        if (plan.isThree) {
+            return Fill(PickText({"{A} rises up for three...", "{A} lets it fly from deep...", "{A} fires from downtown..."}), shooterName);
+        }
+        if (layup) {
+            return Fill(PickText({"{A} goes up strong at the rim...", "{A} lays it up..."}), shooterName);
+        }
+        return Fill(PickText({"{A} pulls up for the jumper...", "{A} elevates over {B}..."}), shooterName, defenderName);
+    };
+
+    // Shooter edges towards the hoop, offensive rebounders crash the glass when the shot is not meant to go in
+    auto shotMoves = [&](bool crash) {
+        Moves mv;
+        const CourtPoint s = posOf(finalId);
+        if (!plan.isThree && driveSecs == 0) {
+            const float tx = hoop.x - s.x;
+            const float ty = hoop.y - s.y;
+            const float dist = std::max(0.1f, std::hypot(tx, ty));
+            const float step = std::min(plan.fastBreak ? 9.0f : 3.0f, std::max(0.0f, dist - 3.0f));
+            mv[finalId] = ClampToCourt(CourtPoint{s.x + tx / dist * step, s.y + ty / dist * step});
+        }
+        if (crash) {
+            std::vector<std::shared_ptr<Player>> crashers;
+            for (const auto& p : off) {
+                if (p != finalHolder) crashers.push_back(p);
+            }
+            std::sort(crashers.begin(), crashers.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {
+                return a->attributes.physical > b->attributes.physical;
+            });
+            for (size_t k = 0; k < crashers.size() && k < 2; ++k) {
+                mv[crashers[k]->playerId] = rimPoint(5.0f, 9.0f, 8.0f);
+                auto guard = guardOf.find(crashers[k]->playerId);
+                if (guard != guardOf.end()) mv[guard->second] = rimPoint(3.5f, 7.0f, 8.0f);
+            }
+        }
+        return mv;
+    };
+
+    auto reboundMoves = [&](const std::string& reboundId) {
+        Moves mv;
+        for (const auto& cp : matchState->courtPlayers) {
+            mv[cp.playerId] = rimPoint(4.0f, 11.0f, 10.0f);
+        }
+        mv[reboundId] = rimPoint(2.5f, 4.5f, 4.0f);
+        return mv;
+    };
+
+    switch (end) {
+        case PossessionEnd::MadeShot: {
+            PossessionBeat sb = makeBeat("shot", 1, true, 0.9f);
+            sb.moves = shotMoves(false);
+            sb.ballFrom = sb.ballTo = finalId;
+            sb.ballToHoop = true;
+            sb.startText = shotStartText();
+            std::string made;
+            if (plan.isThree) {
+                made = Fill(PickText({"{A} hits the three!", "{A} drains it from deep!", "{A} is good from downtown!"}), shooterName);
+            } else if (layup) {
+                made = Fill(PickText({"{A} finishes at the rim!", "{A} scores inside."}), shooterName);
+            } else {
+                made = Fill(PickText({"{A} knocks down the jumper!", "{A} hits the mid-range shot."}), shooterName);
+            }
+            if (assister) made += " (assist " + assister->lastName + ")";
+            sb.endText = made;
+            sb.onComplete = [this, planCopy, assister]() {
+                ApplyScore(planCopy, planCopy.isThree ? 3 : 2);
+                if (assister) assister->assistsThisGame++;
+                FlipPossession(planCopy);
+            };
+            pushBeat(std::move(sb));
+            break;
+        }
+        case PossessionEnd::DefensiveRebound:
+        case PossessionEnd::OffensiveRebound: {
+            const bool offensive = (end == PossessionEnd::OffensiveRebound);
+            const std::shared_ptr<Player>& rebounder = offensive ? plan.rebounder : plan.defender;
+            const std::string missText = Fill(PickText({"{A} misses.", "{A} can't get it to fall.", "{A} rims out."}), shooterName);
+            const std::string boardText = offensive
+                ? Fill("{A} fights for the offensive board!", rebounder->lastName)
+                : Fill(PickText({"{A} grabs the rebound.", "{A} cleans the glass."}), rebounder->lastName);
+
+            PossessionBeat sb = makeBeat("shot", 1, true, 0.9f);
+            sb.moves = shotMoves(true);
+            sb.ballFrom = finalId;
+            sb.startText = shotStartText();
+            if (merged) {
+                sb.ballTo = rebounder->playerId;
+                sb.endText = missText + " " + boardText;
+                sb.onComplete = [this, planCopy, offensive]() { ApplyRebound(planCopy, offensive); };
+            } else {
+                sb.ballTo = finalId;
+                sb.ballToHoop = true;
+                sb.endText = missText;
+            }
+            pushBeat(std::move(sb));
+
+            if (!merged) {
+                PossessionBeat rb = makeBeat("rebound", 1, true, 1.0f);
+                rb.moves = reboundMoves(rebounder->playerId);
+                rb.ballTo = rebounder->playerId;
+                rb.endText = boardText;
+                rb.onComplete = [this, planCopy, offensive]() { ApplyRebound(planCopy, offensive); };
+                pushBeat(std::move(rb));
+            }
+            break;
+        }
+        case PossessionEnd::Block: {
+            PossessionBeat sb = makeBeat("shot", 1, true, 0.9f);
+            sb.moves = shotMoves(false);
+            sb.ballFrom = finalId;
+            sb.ballTo = plan.defender->playerId;  // swatted straight to the blocker
+            sb.startText = shotStartText();
+            sb.endText = Fill("{A} blocks {B}!", defenderName, shooterName);
+            sb.onComplete = [this, planCopy]() { ApplyBlock(planCopy); };
+            pushBeat(std::move(sb));
+            break;
+        }
+        case PossessionEnd::ShootingFoul: {
+            PossessionBeat sb = makeBeat("shot", 1, true, 0.9f);
+            sb.moves = shotMoves(false);
+            sb.ballFrom = sb.ballTo = finalId;
+            sb.startText = Fill("{A} attacks the basket...", shooterName);
+            sb.endText = Fill("{B} fouls {A}!", shooterName, defenderName);
+            sb.onComplete = [this, planCopy]() { ApplyFoul(planCopy); };
+            pushBeat(std::move(sb));
+
+            std::vector<bool> results(static_cast<size_t>(plan.ftAttempts), false);
+            for (int i = 0; i < plan.ftMade && i < plan.ftAttempts; ++i) results[static_cast<size_t>(i)] = true;
+            std::shuffle(results.begin(), results.end(), gen);
+
+            for (int i = 0; i < plan.ftAttempts; ++i) {
+                const bool good = results[static_cast<size_t>(i)];
+                const bool lastShot = (i == plan.ftAttempts - 1);
+                PossessionBeat ft = makeBeat("freethrow", 1, false, 1.0f);
+                if (i == 0) {
+                    ft.moves[finalId] = CourtPoint{hoopX + dir * 15.0f, kHoopY};
+                    int slot = 0;
+                    for (const auto& cp : matchState->courtPlayers) {
+                        if (cp.playerId == finalId) continue;
+                        ft.moves[cp.playerId] = CourtPoint{hoopX + dir * (6.0f + 3.0f * (slot / 2)), (slot % 2 == 0) ? 19.0f : 31.0f};
+                        ++slot;
+                    }
+                }
+                ft.ballFrom = ft.ballTo = finalId;
+                ft.ballToHoop = true;
+                ft.endText = Fill(good ? "{A} makes free throw " : "{A} misses free throw ", shooterName) +
+                             std::to_string(i + 1) + " of " + std::to_string(plan.ftAttempts) + ".";
+                ft.onComplete = [this, planCopy, good, lastShot]() {
+                    if (good) ApplyScore(planCopy, 1);
+                    if (lastShot) FlipPossession(planCopy);
+                };
+                pushBeat(std::move(ft));
+            }
+            break;
+        }
+        case PossessionEnd::Steal: {
+            PossessionBeat sb = makeBeat("steal", 1, true, 1.0f);
+            const CourtPoint a = posOf(finalId);
+            const CourtPoint b = posOf(plan.primary->playerId);
+            sb.moves[plan.defender->playerId] = ClampToCourt(CourtPoint{(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f});
+            sb.ballFrom = finalId;
+            sb.ballTo = plan.defender->playerId;
+            sb.startText = Fill("{A} looks to pass to {B}...", shooterName, plan.primary->lastName);
+            sb.endText = Fill("{A} steals it from {B}!", defenderName, shooterName);
+            sb.onComplete = [this, planCopy]() { ApplyTurnover(planCopy, true); };
+            pushBeat(std::move(sb));
+            break;
+        }
+        case PossessionEnd::Turnover: {
+            PossessionBeat sb = makeBeat("turnover", 1, true, 1.0f);
+            sb.ballFrom = finalId;
+            sb.ballTo = plan.defender->playerId;
+            sb.endText = Fill(PickText({"{A} loses the handle, {B} takes it away.", "{A} travels, turnover.",
+                                        "{A} throws it away."}), shooterName, defenderName);
+            sb.onComplete = [this, planCopy]() { ApplyTurnover(planCopy, false); };
+            pushBeat(std::move(sb));
+            break;
+        }
+        case PossessionEnd::None:
+            break;
+    }
+
+    // Keep the clock honest: the beats that run the clock must add up to the planned possession length
+    int clockSum = 0;
+    for (const auto& b : beatQueue) {
+        if (b.clockRuns) clockSum += b.seconds;
+    }
+    int diff = plan.duration - clockSum;
+    for (auto& b : beatQueue) {
+        if (diff == 0) break;
+        if (!b.clockRuns) continue;
+        if (diff > 0) {
+            b.seconds += diff;
+            diff = 0;
+        } else if (b.seconds + diff >= 1) {
+            b.seconds += diff;
+            diff = 0;
+        } else {
+            diff += b.seconds - 1;
+            b.seconds = 1;
+        }
+    }
+}
+
+void MatchEngine::StartNextBeat() {
+    activeBeat = std::move(beatQueue.front());
+    beatQueue.pop_front();
+    beatActive = true;
+    activeBeatSecondsLeft = std::max(1, activeBeat.seconds);
+    activeBeatSecondIndex = 0;
+    if (!activeBeat.startText.empty()) EmitFeed(activeBeat.startText);
+}
+
+void MatchEngine::PlayBeatSecond() {
+    ++activeBeatSecondIndex;
+    const bool lastSecond = (activeBeatSecondsLeft == 1);
+
+    // Players walk towards this beat's destinations; the ones that arrived sway a little
+    for (auto& cp : matchState->courtPlayers) {
+        auto dest = activeBeat.moves.find(cp.playerId);
+        if (dest == activeBeat.moves.end()) continue;
+
+        float pace = 10.0f;
+        auto actor = actorById.find(cp.playerId);
+        if (actor != actorById.end()) pace = static_cast<float>(actor->second->attributes.pace);
+        const float maxStep = (8.0f + 0.55f * pace) * activeBeat.speedFactor;
+
+        const float dx = dest->second.x - cp.x;
+        const float dy = dest->second.y - cp.y;
+        const float dist = std::hypot(dx, dy);
+        if (dist <= maxStep) {
+            cp.x = dest->second.x + Jit(0.35f);
+            cp.y = dest->second.y + Jit(0.35f);
+        } else {
+            cp.x += dx / dist * maxStep;
+            cp.y += dy / dist * maxStep;
+        }
+        cp.x = Clampf(cp.x, 0.5f, 93.5f);
+        cp.y = Clampf(cp.y, 0.5f, 49.5f);
+    }
+
+    // The ball stays with its holder, then travels to the next one (or the hoop) in the last second
+    BallState& ball = matchState->ball;
+    auto findPlayer = [&](const std::string& id, CourtPoint& out) {
+        for (const auto& cp : matchState->courtPlayers) {
+            if (cp.playerId == id) {
+                out = CourtPoint{cp.x, cp.y};
+                return true;
+            }
+        }
+        return false;
+    };
+
+    CourtPoint where;
+    ball.phase = activeBeat.phase;
+    if (activeBeat.ballToHoop && lastSecond) {
+        ball.x = activeBeat.hoop.x;
+        ball.y = activeBeat.hoop.y;
+        ball.z = 10.0f;
+        ball.inFlight = true;
+        ball.holderPlayerId.clear();
+    } else if (activeBeat.ballTo != activeBeat.ballFrom && lastSecond) {
+        if (findPlayer(activeBeat.ballTo, where)) {
+            ball.x = where.x;
+            ball.y = where.y;
+        }
+        ball.z = activeBeat.ballFrom.empty() ? 1.5f : 5.0f;
+        ball.inFlight = !activeBeat.ballFrom.empty();
+        ball.holderPlayerId.clear();
+    } else if (!activeBeat.ballFrom.empty() && findPlayer(activeBeat.ballFrom, where)) {
+        ball.x = where.x;
+        ball.y = where.y;
+        ball.z = 3.5f;
+        ball.inFlight = false;
+        ball.holderPlayerId = activeBeat.ballFrom;
+    }
+
+    for (auto& cp : matchState->courtPlayers) {
+        cp.hasBall = (cp.playerId == ball.holderPlayerId);
+        cp.action = cp.hasBall ? (activeBeat.phase == "shot" ? "shoot" : (activeBeat.phase == "drive" ? "drive" : "dribble")) : "idle";
+    }
+
+    if (activeBeat.clockRuns && matchState->timeRemaining > 0) {
+        matchState->timeRemaining--;
+        matchState->timeElapsed++;
+        ApplyFatigue(1.0f);
+    }
+
+    if (--activeBeatSecondsLeft <= 0) CompleteBeat();
+}
+
+void MatchEngine::CompleteBeat() {
+    if (activeBeat.onComplete) activeBeat.onComplete();
+    if (!activeBeat.endText.empty()) EmitFeed(activeBeat.endText);
+
+    // Settle the ball with its new holder
+    BallState& ball = matchState->ball;
+    if (activeBeat.ballToHoop) {
+        ball.x = activeBeat.hoop.x;
+        ball.y = activeBeat.hoop.y;
+        ball.z = 0.0f;
+        ball.inFlight = false;
+        ball.holderPlayerId.clear();
+    } else if (!activeBeat.ballTo.empty()) {
+        for (const auto& cp : matchState->courtPlayers) {
+            if (cp.playerId == activeBeat.ballTo) {
+                ball.x = cp.x;
+                ball.y = cp.y;
+                break;
+            }
+        }
+        ball.z = 3.5f;
+        ball.inFlight = false;
+        ball.holderPlayerId = activeBeat.ballTo;
+    }
+    for (auto& cp : matchState->courtPlayers) {
+        cp.hasBall = (cp.playerId == ball.holderPlayerId);
+    }
+
+    beatActive = false;
+    if (beatQueue.empty()) FinishPossession();
+}
+
+void MatchEngine::FinishPossession() {
+    // Dead ball: the right moment for automatic substitutions
+    tacticalManager->CheckAutoSubstitutions(matchState->homeTeam, true, matchState->timeElapsed);
+    tacticalManager->CheckAutoSubstitutions(matchState->awayTeam, false, matchState->timeElapsed);
+    for (const auto& log : tacticalManager->ConsumeSubstitutionLogs()) {
+        EmitFeed(log);
+    }
+}
+
+bool MatchEngine::StepSecond() {
+    if (!matchState || matchState->matchComplete) return false;
+
+    if (!beatActive) {
+        if (beatQueue.empty()) {
+            PossessionPlan plan;
+            if (!PlanPossession(plan)) return false;
+
+            if (plan.end == PossessionEnd::None) {
+                // No lineup on the floor: let the clock run so the match can still finish
+                RebuildCourtRoster();
+                PossessionBeat dead;
+                dead.phase = "dead";
+                dead.seconds = std::max(1, plan.duration);
+                beatQueue.push_back(dead);
+            } else {
+                BuildScript(plan);
+            }
+        }
+        if (beatQueue.empty()) return false;
+        StartNextBeat();
+    }
+
+    PlayBeatSecond();
+    return true;
+}
+
+int MatchEngine::StepSeconds(int seconds) {
+    int played = 0;
+    while (played < seconds && StepSecond()) ++played;
+    return played;
+}
+
+bool MatchEngine::IsPeriodBreak() const {
+    return matchState && !matchState->matchComplete && matchState->timeRemaining <= 0 && !beatActive && beatQueue.empty();
 }
 
 } // namespace engine

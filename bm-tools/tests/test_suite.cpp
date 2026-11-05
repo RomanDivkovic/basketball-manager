@@ -2,9 +2,12 @@
 #include "engine/MatchEngine.h"
 #include "common/Types.h"
 #include <iostream>
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <string>
 #include <memory>
+#include <unordered_map>
 
 static int g_testsPassed = 0;
 static int g_testsFailed = 0;
@@ -121,6 +124,107 @@ void TestOvertimeTriggerWhenTied() {
     g_testsPassed++;
 }
 
+void TestSecondByStepFlow() {
+    std::cout << "[TEST] Second-by-second match flow (clock, movement, ball, scoring)...\n";
+    auto homeTeam = CreateMockTeam("1", "Boston Celtics");
+    auto awayTeam = CreateMockTeam("2", "New York Knicks");
+
+    bm::engine::MatchEngine engine;
+    engine.SetHeadless(true);
+    engine.InitializeMatch(homeTeam, awayTeam);
+    auto state = engine.GetMatchState();
+    TEST_ASSERT(state != nullptr, "Match state must not be null");
+
+    std::unordered_map<std::string, std::pair<float, float>> previous;
+    int prevQuarter = state->quarterNumber;
+    int prevClock = state->timeRemaining;
+    int steps = 0;
+    int clockViolations = 0;
+    int boundsViolations = 0;
+    float maxMove = 0.0f;
+    bool sawBallFlight = false;
+    bool sawHolder = false;
+
+    while (steps < 60000 && engine.StepSecond()) {
+        ++steps;
+
+        if (state->quarterNumber == prevQuarter) {
+            const int drop = prevClock - state->timeRemaining;
+            if (drop < 0 || drop > 1) clockViolations++;
+        }
+        prevQuarter = state->quarterNumber;
+        prevClock = state->timeRemaining;
+
+        std::unordered_map<std::string, std::pair<float, float>> current;
+        for (const auto& cp : state->courtPlayers) {
+            if (cp.x < 0.0f || cp.x > 94.0f || cp.y < 0.0f || cp.y > 50.0f) boundsViolations++;
+            auto it = previous.find(cp.playerId);
+            if (it != previous.end()) {
+                maxMove = std::max(maxMove, std::hypot(cp.x - it->second.first, cp.y - it->second.second));
+            }
+            current[cp.playerId] = {cp.x, cp.y};
+        }
+        // Players who just came on from the bench have no earlier position to compare with
+        previous.swap(current);
+        const auto& ball = state->ball;
+        if (ball.x < 0.0f || ball.x > 94.0f || ball.y < 0.0f || ball.y > 50.0f) boundsViolations++;
+        if (ball.inFlight) sawBallFlight = true;
+        if (!ball.holderPlayerId.empty()) sawHolder = true;
+    }
+
+    TEST_ASSERT(state->matchComplete, "Match must finish when stepped second by second");
+    TEST_ASSERT(state->quarterNumber >= 4, "Match must reach the fourth quarter");
+    TEST_ASSERT(clockViolations == 0, "Game clock must tick down by at most one second per step");
+    TEST_ASSERT(boundsViolations == 0, "Players and ball must stay inside the court");
+    TEST_ASSERT(maxMove <= 25.0f, "No player may teleport more than 25 ft in one second");
+    TEST_ASSERT(sawBallFlight && sawHolder, "Ball must be both carried and passed/shot");
+    TEST_ASSERT(engine.GetFeedTotal() > 100, "Play-by-play feed must describe the game");
+    TEST_ASSERT(steps > 2500, "A full game is roughly 2880 clock seconds plus stopped-clock beats");
+
+    int homePoints = 0;
+    int awayPoints = 0;
+    for (const auto& p : homeTeam->roster) homePoints += p->pointsThisGame;
+    for (const auto& p : awayTeam->roster) awayPoints += p->pointsThisGame;
+    TEST_ASSERT(homePoints == state->homeScore, "Home player points must add up to the home score");
+    TEST_ASSERT(awayPoints == state->awayScore, "Away player points must add up to the away score");
+
+    std::cout << "  -> " << steps << " steps, final " << state->homeScore << " - " << state->awayScore
+              << ", max move " << maxMove << " ft/s, feed lines " << engine.GetFeedTotal() << "\n";
+    g_testsPassed++;
+}
+
+void TestFlowVariety() {
+    std::cout << "[TEST] Flow produces passes, drives, fast breaks and free throws...\n";
+    int passes = 0, drives = 0, breaks = 0, freeThrows = 0, assists = 0;
+
+    for (int game = 0; game < 3; ++game) {
+        auto homeTeam = CreateMockTeam("1", "Boston Celtics");
+        auto awayTeam = CreateMockTeam("2", "Miami Heat");
+        bm::engine::MatchEngine engine;
+        engine.SetHeadless(true);
+        engine.InitializeMatch(homeTeam, awayTeam);
+        engine.StepSeconds(60000);
+
+        for (const auto& line : engine.GetFeed()) {
+            if (line.find("swings it") != std::string::npos || line.find("kicks it out") != std::string::npos ||
+                line.find("finds") != std::string::npos || line.find("feeds") != std::string::npos) passes++;
+            if (line.find("attacks the rim") != std::string::npos || line.find("drives to") != std::string::npos ||
+                line.find("blows by") != std::string::npos) drives++;
+            if (line.find("pushes it up") != std::string::npos || line.find("off to the races") != std::string::npos ||
+                line.find("leads the break") != std::string::npos) breaks++;
+            if (line.find("free throw") != std::string::npos) freeThrows++;
+            if (line.find("(assist") != std::string::npos) assists++;
+        }
+    }
+
+    // The feed keeps only the newest 200 lines, so counts are a sample of each game's closing minutes
+    TEST_ASSERT(passes > 0, "Ball must be passed around");
+    TEST_ASSERT(drives + breaks + freeThrows + assists > 0, "Drives, fast breaks, free throws or assists must appear");
+    std::cout << "  -> sample: passes " << passes << ", drives " << drives << ", breaks " << breaks
+              << ", free throws " << freeThrows << ", assists " << assists << "\n";
+    g_testsPassed++;
+}
+
 void TestBridgeSeasonAndPlayoffs() {
     std::cout << "[TEST] UnityBridge Season & Playoff Bracket Integration...\n";
     LoadDatabase("/tmp/basketball_manager_readable.db");
@@ -170,6 +274,8 @@ int main() {
 
     TestQuarterProgression();
     TestOvertimeTriggerWhenTied();
+    TestSecondByStepFlow();
+    TestFlowVariety();
     TestBridgeSeasonAndPlayoffs();
 
     std::cout << "\n----------------------------------------\n";

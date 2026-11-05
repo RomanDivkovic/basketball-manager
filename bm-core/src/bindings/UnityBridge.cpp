@@ -195,7 +195,19 @@ void UpdateStateJson() {
          << ",\"homePossession\":" << (state.homeTeamPossession ? "true" : "false")
          << ",\"isGameOver\":" << (state.matchComplete ? "true" : "false")
          << ",\"commentary\":\"" << EscapeJson(state.lastPlay)
-         << "\",\"homePlayers\":";
+         << "\",\"periodBreak\":" << (matchEngine->IsPeriodBreak() ? "true" : "false")
+         << ",\"feedTotal\":" << matchEngine->GetFeedTotal()
+         << ",\"feed\":[";
+    {
+        // The newest lines; the UI keeps its own cursor into feedTotal so nothing is shown twice
+        const auto& feed = matchEngine->GetFeed();
+        const size_t first = feed.size() > 60 ? feed.size() - 60 : 0;
+        for (size_t i = first; i < feed.size(); ++i) {
+            if (i > first) json << ",";
+            json << "\"" << EscapeJson(feed[i]) << "\"";
+        }
+    }
+    json << "],\"homePlayers\":";
     SerializePlayers(json, state.homeTeam->roster);
     json << ",\"awayPlayers\":";
     SerializePlayers(json, state.awayTeam->roster);
@@ -246,8 +258,16 @@ void InitializeMatch(const char* homeTeamId, const char* awayTeamId) {
         return;
     }
     matchEngine = std::make_unique<bm::engine::MatchEngine>();
+    matchEngine->SetHeadless(true);
     matchEngine->InitializeMatch(homeTeam, awayTeam);
     UpdateStateJson();
+}
+
+int StepMatchSeconds(int seconds) {
+    if (!matchEngine || !matchEngine->GetMatchState() || seconds <= 0) return 0;
+    const int played = matchEngine->StepSeconds(std::min(seconds, 600));
+    UpdateStateJson();
+    return played;
 }
 
 int SimulatePossession() {
