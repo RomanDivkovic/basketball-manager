@@ -67,4 +67,36 @@ void GetAILineup(char* outBuffer, int bufferSize);
 // Version info
 const char* GetEngineVersion();
 
+// League files: teams.csv + players.csv in a folder become a league database (same schema as the shipped one)
+int ImportLeagueFolder(const char* folder, const char* outDbPath);   // 0 = invalid, see GetLeagueMessage
+int ExportLeagueTemplate(const char* folder);                         // writes teams.csv, players.csv, README.txt
+const char* GetLeagueMessage();
+
+// Career: a dated year (preseason, 82-game season, play-in, playoffs, contracts, draft, free agency, summer league, camp)
+int CareerStart(const char* userTeamId, int startYear, int seed);
+void CareerEnd();
+const char* CareerGetStateJson();
+const char* CareerContinue();                    // moves time until something needs the coach; returns the stop
+const char* CareerVacation(const char* target);  // week, month, playoffs, season_end, draft, free_agency, camp, new_season
+void CareerDismissStop();
+const char* CareerGetScheduleJson();
+int CareerBeginCoachGame();                      // sets up the live match for the coach's pending game
+int CareerFinishCoachGame();                     // records the finished live match
+int CareerSimCoachGame();                        // the assistant plays it
+const char* CareerGetContractsJson();
+int CareerRenew(const char* playerId, int years);
+int CareerRelease(const char* playerId);
+const char* CareerGetFreeAgentsJson();
+int CareerSignFreeAgent(const char* playerId, int years);
+const char* CareerGetMessage();
+const char* CareerGetDraftJson();
+void CareerDraftAdvance();
+int CareerDraftPick(const char* playerId);
+void CareerDraftAuto();
+const char* CareerGetSummerJson();
+void CareerSetSummerMode(int mode);              // 1 = the coach plays, 2 = the assistant runs it
+void CareerSetTrainingPlan(const char* focus, int intensity, int coachDevelopment);
+void CareerSetMentoring(const char* mentorId, const char* menteeId);
+int CareerAssistantFillRoster();
+
 } // extern "C"

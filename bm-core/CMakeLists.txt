@@ -19,12 +19,14 @@ set(SOURCES
     src/engine/MatchEngine.cpp
     src/engine/TacticalManager.cpp
     src/engine/SeasonManager.cpp
+    src/engine/CareerManager.cpp
     src/engine/SimulationManager.cpp
     src/engine/CourtVisualizer.cpp
     src/ai/AICoordinator.cpp
     src/ai/TacticAI.cpp
     src/db/DatabaseManager.cpp
     src/db/DatabaseLoader.cpp
+    src/db/LeagueImport.cpp
     src/lua/LuaRulesEngine.cpp
     src/lua/LuaBindings.cpp
     src/stats/StatisticsEngine.cpp
@@ -37,12 +39,14 @@ set(HEADERS
     include/engine/MatchEngine.h
     include/engine/TacticalManager.h
     include/engine/SeasonManager.h
+    include/engine/CareerManager.h
     include/engine/SimulationManager.h
     include/engine/CourtVisualizer.h
     include/ai/AICoordinator.h
     include/ai/TacticAI.h
     include/db/DatabaseManager.h
     include/db/DatabaseLoader.h
+    include/db/LeagueImport.h
     include/lua/LuaRulesEngine.h
     include/lua/LuaBindings.h
     include/stats/StatisticsEngine.h

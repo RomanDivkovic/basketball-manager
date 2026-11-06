@@ -1,5 +1,7 @@
 #include "bindings/UnityBridge.h"
 #include "db/DatabaseManager.h"
+#include "db/LeagueImport.h"
+#include "engine/CareerManager.h"
 #include "engine/MatchEngine.h"
 #include "engine/SeasonManager.h"
 #include <algorithm>
@@ -16,6 +18,17 @@ namespace {
 std::shared_ptr<bm::db::DatabaseManager> database;
 std::unique_ptr<bm::engine::MatchEngine> matchEngine;
 std::unique_ptr<bm::engine::SeasonManager> seasonManager;
+std::unique_ptr<bm::engine::CareerManager> career;
+bool coachGameUserHome = true;
+std::string careerJson;
+std::string careerStopJson;
+std::string careerScheduleJson;
+std::string contractsJson;
+std::string freeAgentsJson;
+std::string draftJson;
+std::string summerJson;
+std::string careerMessage;
+std::string leagueMessage;
 int currentSeasonDay = 1;
 std::shared_ptr<bm::Team> homeTeam;
 std::shared_ptr<bm::Team> awayTeam;
@@ -107,7 +120,8 @@ std::shared_ptr<bm::Team> LoadTeam(const char* teamId) {
 
     auto roster = database->PrepareStatement(
         "SELECT player_id, first_name, last_name, position, jersey_number, "
-        "pace, shooting, ball_control, defense, physical, technical, current_ability "
+        "pace, shooting, ball_control, defense, physical, technical, current_ability, "
+        "potential_ability, birth_date, height, weight "
         "FROM players WHERE team_id = ? ORDER BY jersey_number");
     if (!roster) return nullptr;
     sqlite3_bind_int(roster, 1, dbTeamId);
@@ -129,6 +143,11 @@ std::shared_ptr<bm::Team> LoadTeam(const char* teamId) {
         player->attributes.physical = sqlite3_column_int(roster, 9);
         player->attributes.technical = sqlite3_column_int(roster, 10);
         player->attributes.currentAbility = sqlite3_column_int(roster, 11);
+        player->attributes.potentialAbility = std::max(player->attributes.currentAbility, sqlite3_column_int(roster, 12));
+        const char* birth = reinterpret_cast<const char*>(sqlite3_column_text(roster, 13));
+        player->birthDate = birth ? birth : "2000-01-01";
+        player->height = static_cast<float>(sqlite3_column_double(roster, 14));
+        player->weight = static_cast<float>(sqlite3_column_double(roster, 15));
         player->active = true;
         player->onCourt = false;
         player->fatigueLevel = 0.0f;
@@ -269,6 +288,296 @@ void UpdateStateJson() {
 
     json << "}";
     stateJson = json.str();
+}
+
+// ---- Career helpers (dated year, contracts, draft, free agency) ----
+
+bm::engine::CareerStop careerLastStop;
+
+bm::engine::SeasonManager* ActiveSeason() {
+    return career ? &career->Season() : seasonManager.get();
+}
+
+int CareerCalendarDay() {
+    if (!career) return 1;
+    using bm::engine::CareerPhase;
+    switch (career->Phase()) {
+        case CareerPhase::Preseason: return 1;
+        case CareerPhase::RegularSeason:
+            return std::clamp(career->RegularSeasonDay(), 1, std::max(1, career->RegularSeasonLength()));
+        default: return std::max(1, career->RegularSeasonLength());
+    }
+}
+
+std::string StopJson(const bm::engine::CareerStop& stop) {
+    std::ostringstream json;
+    json << "{\"kind\":\"" << EscapeJson(stop.kind) << "\",\"title\":\"" << EscapeJson(stop.title)
+         << "\",\"detail\":\"" << EscapeJson(stop.detail) << "\",\"blocking\":" << (stop.blocking ? "true" : "false") << "}";
+    return json.str();
+}
+
+// One player as shown in contract, free agent and draft lists; quotes[y-1] is the salary he asks for y years
+std::string PlayerCardJson(const bm::Player& p, bool withQuotes, bool ownPlayer) {
+    std::ostringstream json;
+    json << "{\"id\":\"" << EscapeJson(p.playerId) << "\",\"name\":\"" << EscapeJson(p.firstName + " " + p.lastName)
+         << "\",\"pos\":\"" << PositionToStr(p.position) << "\",\"age\":" << p.age
+         << ",\"rating\":" << p.attributes.currentAbility << ",\"potential\":" << p.attributes.potentialAbility
+         << ",\"salary\":" << p.salary << ",\"endYear\":" << p.contractEndYear
+         << ",\"jersey\":" << p.jerseyNumber
+         << ",\"height\":" << std::fixed << std::setprecision(2) << p.height
+         << ",\"weight\":" << std::setprecision(0) << p.weight;
+    if (career && withQuotes) {
+        json << ",\"preferredYears\":" << career->PreferredYears(p) << ",\"quotes\":[";
+        for (int y = 1; y <= 5; ++y) json << (y > 1 ? "," : "") << career->Quote(p, y, ownPlayer);
+        json << "]";
+    }
+    json << "}";
+    return json.str();
+}
+
+std::string BuildCareerJson() {
+    if (!career || !career->IsStarted()) return "{\"started\":false}";
+    using bm::engine::CareerPhase;
+    auto* season = &career->Season();
+    auto userTeam = career->UserTeam();
+    const std::string userId = career->UserTeamId();
+
+    int wins = 0, losses = 0, confRank = 0, leagueRank = 0;
+    std::string conference = userTeam ? userTeam->conferenceId : "";
+    {
+        auto all = season->GetStandings("");
+        for (size_t i = 0; i < all.size(); ++i) {
+            if (all[i].team->teamId == userId) { wins = all[i].wins; losses = all[i].losses; leagueRank = static_cast<int>(i) + 1; }
+        }
+        auto conf = season->GetStandings(conference);
+        for (size_t i = 0; i < conf.size(); ++i) if (conf[i].team->teamId == userId) confRank = static_cast<int>(i) + 1;
+    }
+
+    std::ostringstream json;
+    const int year = career->SeasonYear();
+    json << "{\"started\":true,\"date\":\"" << EscapeJson(career->DateLabel()) << "\",\"dayIndex\":" << career->Today()
+         << ",\"year\":" << year << ",\"seasonLabel\":\"" << year << "/" << std::setw(2) << std::setfill('0') << ((year + 1) % 100)
+         << std::setfill(' ') << "\",\"phase\":\"" << bm::engine::PhaseName(career->Phase()) << "\",\"phaseId\":" << static_cast<int>(career->Phase())
+         << ",\"userTeamId\":\"" << EscapeJson(userId) << "\",\"userTeamName\":\"" << EscapeJson(userTeam ? userTeam->name : "")
+         << "\",\"conference\":\"" << EscapeJson(conference) << "\",\"wins\":" << wins << ",\"losses\":" << losses
+         << ",\"confRank\":" << confRank << ",\"leagueRank\":" << leagueRank
+         << ",\"regularDay\":" << career->RegularSeasonDay() << ",\"regularDays\":" << career->RegularSeasonLength()
+         << ",\"gamesPlayed\":" << season->GetGamesPlayed() << ",\"totalGames\":" << season->GetTotalGames()
+         << ",\"totalWins\":" << (career->CompletedWins() + (career->SeasonCounted() ? 0 : wins))
+         << ",\"totalLosses\":" << (career->CompletedLosses() + (career->SeasonCounted() ? 0 : losses))
+         << ",\"titles\":" << career->TitlesWon()
+         << ",\"nextMilestone\":\"" << EscapeJson(career->NextMilestoneLabel()) << "\",\"daysToMilestone\":" << career->DaysToNextMilestone()
+         << ",\"playoffsVisible\":" << (career->PlayoffsVisible() ? "true" : "false")
+         << ",\"champion\":\"" << EscapeJson(career->ChampionName()) << "\"";
+
+    // What is waiting: an info message that has not been dismissed, otherwise a blocking decision
+    bm::engine::CareerStop stop = (careerLastStop.kind != "none" && !careerLastStop.kind.empty() && !careerLastStop.blocking)
+        ? careerLastStop : career->CurrentStop();
+    if (stop.kind.empty()) stop.kind = "none";
+    json << ",\"stop\":" << StopJson(stop);
+
+    auto game = career->PendingCoachGame();
+    json << ",\"coachGame\":{\"pending\":" << (game.pending ? "true" : "false");
+    if (game.pending) {
+        json << ",\"kind\":\"" << game.kind << "\",\"label\":\"" << EscapeJson(game.label) << "\",\"homeId\":\"" << EscapeJson(game.home->teamId)
+             << "\",\"homeName\":\"" << EscapeJson(game.home->name) << "\",\"awayId\":\"" << EscapeJson(game.away->teamId)
+             << "\",\"awayName\":\"" << EscapeJson(game.away->name) << "\",\"userIsHome\":" << (game.home->teamId == userId ? "true" : "false");
+    }
+    json << "}";
+
+    // The user's next fixture and recent results
+    std::ostringstream recent;
+    bool firstRecent = true;
+    std::string nextJson = "{\"has\":false}";
+    bool haveNext = false;
+    int lastDayWithResults = 0;
+    std::vector<std::string> recentList;
+    for (int d = 1; d <= season->GetFixtureDayCount(); ++d) {
+        const auto* day = season->GetFixtureDay(d);
+        if (!day) continue;
+        if (day->simulated) lastDayWithResults = d;
+        for (const auto& g : day->games) {
+            const bool home = g.homeTeam->teamId == userId;
+            if (!home && g.awayTeam->teamId != userId) continue;
+            const auto& opp = home ? g.awayTeam : g.homeTeam;
+            if (g.played) {
+                const int mine = home ? g.homeScore : g.awayScore;
+                const int theirs = home ? g.awayScore : g.homeScore;
+                std::ostringstream one;
+                one << "{\"date\":\"" << EscapeJson(career->FixtureDateLabel(d)) << "\",\"opponent\":\"" << EscapeJson(opp->name)
+                    << "\",\"home\":" << (home ? "true" : "false") << ",\"win\":" << (mine > theirs ? "true" : "false")
+                    << ",\"score\":\"" << mine << "-" << theirs << "\"}";
+                recentList.push_back(one.str());
+            } else if (!haveNext) {
+                haveNext = true;
+                std::ostringstream one;
+                one << "{\"has\":true,\"date\":\"" << EscapeJson(career->FixtureDateLabel(d)) << "\",\"opponent\":\"" << EscapeJson(opp->name)
+                    << "\",\"home\":" << (home ? "true" : "false") << "}";
+                nextJson = one.str();
+            }
+        }
+    }
+    json << ",\"nextGame\":" << nextJson << ",\"recent\":[";
+    const size_t from = recentList.size() > 5 ? recentList.size() - 5 : 0;
+    for (size_t i = recentList.size(); i > from; --i) {
+        json << (firstRecent ? "" : ",") << recentList[i - 1];
+        firstRecent = false;
+    }
+    json << "],\"leagueResults\":[";
+    if (lastDayWithResults > 0) {
+        bool first = true;
+        for (const auto& g : season->GetFixtureDay(lastDayWithResults)->games) {
+            if (!g.played) continue;
+            json << (first ? "" : ",") << "{\"home\":\"" << EscapeJson(g.homeTeam->name) << "\",\"away\":\"" << EscapeJson(g.awayTeam->name)
+                 << "\",\"homeScore\":" << g.homeScore << ",\"awayScore\":" << g.awayScore << "}";
+            first = false;
+        }
+    }
+    json << "],\"resultsDate\":\"" << EscapeJson(lastDayWithResults > 0 ? career->FixtureDateLabel(lastDayWithResults) : "") << "\"";
+
+    json << ",\"inbox\":[";
+    int shown = 0;
+    for (const auto& ev : career->Inbox()) {
+        if (shown++ >= 15) break;
+        json << (shown > 1 ? "," : "") << "{\"date\":\"" << EscapeJson(bm::engine::FormatDate(ev.day)) << "\",\"title\":\"" << EscapeJson(ev.title)
+             << "\",\"text\":\"" << EscapeJson(ev.text) << "\"}";
+    }
+    json << "]";
+
+    const int payroll = career->Payroll(userId);
+    json << ",\"payroll\":" << payroll << ",\"cap\":" << career->SalaryCap() << ",\"luxury\":" << career->LuxuryLine()
+         << ",\"rosterSize\":" << (userTeam ? userTeam->roster.size() : 0) << ",\"minRoster\":" << bm::engine::CareerManager::MinRosterSize()
+         << ",\"maxRoster\":" << bm::engine::CareerManager::MaxRosterSize()
+         << ",\"expiring\":" << career->ExpiringPlayers().size()
+         << ",\"draftReady\":" << (career->DraftReady() ? "true" : "false") << ",\"draftDone\":" << (career->DraftFinished() ? "true" : "false")
+         << ",\"userOnClock\":" << (career->UserOnClock() ? "true" : "false")
+         << ",\"summerMode\":" << career->SummerLeagueMode() << ",\"inSummer\":" << (career->InSummerLeague() ? "true" : "false")
+         << ",\"campPlanned\":" << (career->TrainingPlanSet() ? "true" : "false")
+         << ",\"campFocus\":\"" << EscapeJson(career->CampFocus()) << "\",\"campIntensity\":" << career->CampIntensity()
+         << ",\"faOpen\":" << (career->FreeAgencyOpen() ? "true" : "false") << ",\"freeAgentCount\":" << career->FreeAgents().size()
+         << "}";
+    return json.str();
+}
+
+std::string BuildScheduleJson() {
+    if (!career || !career->IsStarted()) return "{\"games\":[]}";
+    auto* season = &career->Season();
+    const std::string userId = career->UserTeamId();
+    std::ostringstream json;
+    json << "{\"games\":[";
+    bool first = true;
+    for (int d = 1; d <= season->GetFixtureDayCount(); ++d) {
+        const auto* day = season->GetFixtureDay(d);
+        if (!day) continue;
+        for (const auto& g : day->games) {
+            const bool home = g.homeTeam->teamId == userId;
+            if (!home && g.awayTeam->teamId != userId) continue;
+            json << (first ? "" : ",") << "{\"day\":" << d << ",\"date\":\"" << EscapeJson(career->FixtureDateLabel(d))
+                 << "\",\"opponent\":\"" << EscapeJson((home ? g.awayTeam : g.homeTeam)->name) << "\",\"home\":" << (home ? "true" : "false")
+                 << ",\"played\":" << (g.played ? "true" : "false") << ",\"mine\":" << (home ? g.homeScore : g.awayScore)
+                 << ",\"theirs\":" << (home ? g.awayScore : g.homeScore) << "}";
+            first = false;
+        }
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string BuildContractsJson() {
+    if (!career || !career->IsStarted()) return "{\"players\":[]}";
+    auto team = career->UserTeam();
+    std::vector<std::shared_ptr<bm::Player>> roster = team ? team->roster : std::vector<std::shared_ptr<bm::Player>>();
+    std::sort(roster.begin(), roster.end(), [](const auto& a, const auto& b) { return a->attributes.currentAbility > b->attributes.currentAbility; });
+    std::ostringstream json;
+    json << "{\"year\":" << career->SeasonYear() << ",\"payroll\":" << career->Payroll(career->UserTeamId())
+         << ",\"cap\":" << career->SalaryCap() << ",\"luxury\":" << career->LuxuryLine() << ",\"players\":[";
+    for (size_t i = 0; i < roster.size(); ++i) {
+        const auto& p = roster[i];
+        std::string card = PlayerCardJson(*p, true, true);
+        card.pop_back();
+        card += std::string(",\"expiring\":") + (p->contractEndYear <= career->SeasonYear() ? "true" : "false") + "}";
+        json << (i ? "," : "") << card;
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string BuildFreeAgentsJson() {
+    if (!career || !career->IsStarted()) return "{\"players\":[]}";
+    auto pool = career->FreeAgents();
+    std::sort(pool.begin(), pool.end(), [](const auto& a, const auto& b) {
+        return a->attributes.currentAbility + 0.3 * std::max(0, a->attributes.potentialAbility - a->attributes.currentAbility) * (a->age <= 24)
+             > b->attributes.currentAbility + 0.3 * std::max(0, b->attributes.potentialAbility - b->attributes.currentAbility) * (b->age <= 24);
+    });
+    const int room = career->SalaryCap() - career->Payroll(career->UserTeamId());
+    std::ostringstream json;
+    json << "{\"open\":" << (career->FreeAgencyOpen() ? "true" : "false") << ",\"capRoom\":" << room
+         << ",\"minimum\":" << bm::engine::CareerManager::MinimumSalary()
+         << ",\"rosterSize\":" << (career->UserTeam() ? career->UserTeam()->roster.size() : 0) << ",\"players\":[";
+    const size_t limit = std::min<size_t>(pool.size(), 150);
+    for (size_t i = 0; i < limit; ++i) json << (i ? "," : "") << PlayerCardJson(*pool[i], true, false);
+    json << "]}";
+    return json.str();
+}
+
+std::string BuildDraftJson() {
+    if (!career || !career->IsStarted()) return "{\"ready\":false}";
+    std::ostringstream json;
+    json << "{\"ready\":" << (career->DraftReady() ? "true" : "false") << ",\"done\":" << (career->DraftFinished() ? "true" : "false")
+         << ",\"cursor\":" << career->DraftCursor() << ",\"total\":" << career->DraftTotalPicks()
+         << ",\"userOnClock\":" << (career->UserOnClock() ? "true" : "false");
+    auto onClock = career->FindTeam(career->DraftTeamOnClock());
+    json << ",\"onClock\":\"" << EscapeJson(onClock ? onClock->name : "") << "\",\"yourPicks\":[";
+    bool first = true;
+    const auto& order = career->DraftOrder();
+    for (size_t i = static_cast<size_t>(career->DraftCursor()); i < order.size(); ++i) {
+        if (order[i] != career->UserTeamId()) continue;
+        json << (first ? "" : ",") << (i + 1);
+        first = false;
+    }
+    json << "],\"prospects\":[";
+    auto prospects = career->Prospects();
+    std::sort(prospects.begin(), prospects.end(), [](const auto& a, const auto& b) {
+        return a->attributes.potentialAbility + a->attributes.currentAbility > b->attributes.potentialAbility + b->attributes.currentAbility;
+    });
+    const size_t limit = std::min<size_t>(prospects.size(), 90);
+    for (size_t i = 0; i < limit; ++i) json << (i ? "," : "") << PlayerCardJson(*prospects[i], false, false);
+    json << "],\"results\":[";
+    const auto& results = career->DraftResults();
+    for (size_t i = 0; i < results.size(); ++i) {
+        auto team = career->FindTeam(results[i].teamId);
+        json << (i ? "," : "") << "{\"pick\":" << results[i].pick << ",\"team\":\"" << EscapeJson(team ? team->name : "")
+             << "\",\"teamId\":\"" << EscapeJson(results[i].teamId) << "\",\"player\":\"" << EscapeJson(results[i].playerName)
+             << "\",\"playerId\":\"" << EscapeJson(results[i].playerId) << "\"}";
+    }
+    json << "]}";
+    return json.str();
+}
+
+std::string BuildSummerJson() {
+    if (!career || !career->IsStarted()) return "{\"games\":[]}";
+    const std::string userId = career->UserTeamId();
+    std::ostringstream json;
+    json << "{\"mode\":" << career->SummerLeagueMode() << ",\"active\":" << (career->InSummerLeague() ? "true" : "false")
+         << ",\"started\":" << (career->SummerGames().empty() ? "false" : "true") << ",\"games\":[";
+    bool first = true;
+    int wins = 0, played = 0;
+    for (const auto& g : career->SummerGames()) {
+        const bool home = g.home->teamId == userId;
+        if (!home && g.away->teamId != userId) continue;
+        const int mine = home ? g.homeScore : g.awayScore;
+        const int theirs = home ? g.awayScore : g.homeScore;
+        if (g.played) { ++played; if (mine > theirs) ++wins; }
+        json << (first ? "" : ",") << "{\"date\":\"" << EscapeJson(bm::engine::FormatDate(g.day)) << "\",\"opponent\":\""
+             << EscapeJson((home ? g.away : g.home)->name) << "\",\"played\":" << (g.played ? "true" : "false")
+             << ",\"mine\":" << mine << ",\"theirs\":" << theirs << "}";
+        first = false;
+    }
+    json << "],\"wins\":" << wins << ",\"played\":" << played << ",\"roster\":[";
+    auto roster = career->SummerRoster(userId);
+    for (size_t i = 0; i < roster.size(); ++i) json << (i ? "," : "") << PlayerCardJson(*roster[i], false, false);
+    json << "]}";
+    return json.str();
 }
 
 }
@@ -427,20 +736,22 @@ void InitializeSeason(int year) {
 }
 
 void SimulateRound(int roundNumber) {
-    if (!seasonManager) return;
+    if (career || !seasonManager) return;
     seasonManager->SimulateDay(roundNumber, true, nullptr, false, 6);
 }
 
 int GetCurrentSeasonDay() {
+    if (career) return CareerCalendarDay();
     return currentSeasonDay;
 }
 
 int GetTotalSeasonDays() {
-    return seasonManager ? seasonManager->GetFixtureDayCount() : 0;
+    auto* season = ActiveSeason();
+    return season ? season->GetFixtureDayCount() : 0;
 }
 
 int SimulateSeasonDay(int speedMultiplier) {
-    if (!seasonManager) return 0;
+    if (career || !seasonManager) return 0;
     int totalDays = seasonManager->GetFixtureDayCount();
     if (currentSeasonDay > totalDays) return 0;
 
@@ -454,13 +765,14 @@ int SimulateSeasonDay(int speedMultiplier) {
 
 const char* GetSeasonCalendarJson() {
     std::ostringstream json;
-    int totalDays = seasonManager ? seasonManager->GetFixtureDayCount() : 0;
-    int gamesPlayed = seasonManager ? seasonManager->GetGamesPlayed() : 0;
-    int totalGames = seasonManager ? seasonManager->GetTotalGames() : 0;
-    bool isComplete = seasonManager ? seasonManager->IsSeasonComplete() : false;
+    auto* season = ActiveSeason();
+    int totalDays = season ? season->GetFixtureDayCount() : 0;
+    int gamesPlayed = season ? season->GetGamesPlayed() : 0;
+    int totalGames = season ? season->GetTotalGames() : 0;
+    bool isComplete = season ? season->IsSeasonComplete() : false;
 
     json << "{"
-         << "\"currentDay\":" << currentSeasonDay
+         << "\"currentDay\":" << (career ? CareerCalendarDay() : currentSeasonDay)
          << ",\"totalDays\":" << totalDays
          << ",\"gamesPlayed\":" << gamesPlayed
          << ",\"totalGames\":" << totalGames
@@ -472,21 +784,23 @@ const char* GetSeasonCalendarJson() {
 }
 
 const char* GetFixturesForDayJson(int dayNumber) {
-    if (!seasonManager) {
+    auto* season = ActiveSeason();
+    if (!season) {
         fixturesJson = "{\"dayNumber\":0,\"label\":\"No Season\",\"simulated\":false,\"fixtures\":[]}";
         return fixturesJson.c_str();
     }
 
-    const auto* day = seasonManager->GetFixtureDay(dayNumber);
+    const auto* day = season->GetFixtureDay(dayNumber);
     if (!day) {
         fixturesJson = "{\"dayNumber\":" + std::to_string(dayNumber) + ",\"label\":\"Day " + std::to_string(dayNumber) + "\",\"simulated\":false,\"fixtures\":[]}";
         return fixturesJson.c_str();
     }
 
+    const std::string dayLabel = career ? career->FixtureDateLabel(day->dayNumber) : day->label;
     std::ostringstream json;
     json << "{"
          << "\"dayNumber\":" << day->dayNumber
-         << ",\"label\":\"" << EscapeJson(day->label) << "\""
+         << ",\"label\":\"" << EscapeJson(dayLabel) << "\""
          << ",\"simulated\":" << (day->simulated ? "true" : "false")
          << ",\"fixtures\":[";
 
@@ -511,13 +825,14 @@ const char* GetFixturesForDayJson(int dayNumber) {
 }
 
 const char* GetStandingsJson(const char* conference) {
-    if (!seasonManager) {
+    auto* season = ActiveSeason();
+    if (!season) {
         standingsJson = "{\"conference\":\"\",\"standings\":[]}";
         return standingsJson.c_str();
     }
 
     std::string confStr = conference ? conference : "";
-    auto records = seasonManager->GetStandings(confStr);
+    auto records = season->GetStandings(confStr);
 
     std::ostringstream json;
     json << "{"
@@ -554,6 +869,7 @@ const char* GetStandingsJson(const char* conference) {
 }
 
 int GeneratePlayoffBracket() {
+    if (career) return 0;   // the calendar decides when the playoffs start
     if (!seasonManager) {
         InitializeSeason(2026);
     }
@@ -563,6 +879,7 @@ int GeneratePlayoffBracket() {
 }
 
 int AdvancePlayoffRound(int speedMultiplier) {
+    if (career) return 0;
     if (!seasonManager) {
         InitializeSeason(2026);
     }
@@ -574,6 +891,7 @@ int AdvancePlayoffRound(int speedMultiplier) {
 }
 
 int SimulatePlayoffGame(const char* seriesId, int speedMultiplier) {
+    if (career) return 0;
     if (!seasonManager) {
         InitializeSeason(2026);
     }
@@ -582,24 +900,25 @@ int SimulatePlayoffGame(const char* seriesId, int speedMultiplier) {
 }
 
 const char* GetPlayoffsBracketJson() {
-    if (!seasonManager) {
+    if (!career && !seasonManager) {
         InitializeSeason(2026);
     }
-    if (!seasonManager) {
+    auto* season = ActiveSeason();
+    if (!season || (career && !season->ArePlayoffsGenerated())) {
         playoffsJson = "{\"generated\":false,\"isComplete\":false,\"currentRound\":0,\"series\":[]}";
         return playoffsJson.c_str();
     }
 
-    if (!seasonManager->ArePlayoffsGenerated()) {
-        seasonManager->GeneratePlayoffBracket();
+    if (!season->ArePlayoffsGenerated()) {
+        season->GeneratePlayoffBracket();
     }
 
-    const auto& bracket = seasonManager->GetPlayoffBracket();
+    const auto& bracket = season->GetPlayoffBracket();
     std::ostringstream json;
     json << "{"
          << "\"generated\":true"
-         << ",\"isComplete\":" << (seasonManager->ArePlayoffsComplete() ? "true" : "false")
-         << ",\"currentRound\":" << seasonManager->GetCurrentPlayoffRound()
+         << ",\"isComplete\":" << (season->ArePlayoffsComplete() ? "true" : "false")
+         << ",\"currentRound\":" << season->GetCurrentPlayoffRound()
          << ",\"series\":[";
 
     bool first = true;
@@ -646,16 +965,18 @@ const char* GetPlayoffsBracketJson() {
 }
 
 int ArePlayoffsComplete() {
-    return (seasonManager && seasonManager->ArePlayoffsComplete()) ? 1 : 0;
+    auto* season = ActiveSeason();
+    return (season && season->ArePlayoffsComplete()) ? 1 : 0;
 }
 
 const char* GetPlayoffChampionJson() {
-    if (!seasonManager || !seasonManager->ArePlayoffsComplete() || !seasonManager->GetChampion()) {
+    auto* season = ActiveSeason();
+    if (!season || !season->ArePlayoffsComplete() || !season->GetChampion()) {
         championJson = "{\"hasChampion\":false}";
         return championJson.c_str();
     }
 
-    auto champ = seasonManager->GetChampion();
+    auto champ = season->GetChampion();
     std::ostringstream json;
     json << "{"
          << "\"hasChampion\":true"
@@ -729,7 +1050,9 @@ void GetAILineup(char* outBuffer, int bufferSize) {
 }
 
 const char* GetTeamRosterDetailsJson(const char* teamId) {
-    auto team = LoadTeam(teamId);
+    // During a career the live (in-memory) roster is the truth: it has signings, draft picks and progression
+    std::shared_ptr<bm::Team> team = career && teamId ? career->FindTeam(teamId) : nullptr;
+    if (!team) team = LoadTeam(teamId);
     if (!team) {
         teamRosterJson = "{\"teamId\":\"\",\"teamName\":\"\",\"players\":[]}";
         return teamRosterJson.c_str();
@@ -762,6 +1085,9 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"defense\":" << p->attributes.defense
              << ",\"physical\":" << p->attributes.physical
              << ",\"technical\":" << p->attributes.technical
+             << ",\"age\":" << p->age
+             << ",\"salary\":" << p->salary
+             << ",\"contractEnd\":" << p->contractEndYear
              << ",\"stamina\":" << stamina
              << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
              << "}";
@@ -861,6 +1187,200 @@ const char* GetFeedbackJson() {
 
 const char* GetEngineVersion() {
     return ENGINE_VERSION;
+}
+
+// ---- League files ----
+
+int ImportLeagueFolder(const char* folder, const char* outDbPath) {
+    if (!folder || !outDbPath) { leagueMessage = "No folder given"; return 0; }
+    auto result = bm::db::ImportLeagueFromCsv(folder, outDbPath);
+    if (!result.ok) {
+        leagueMessage.clear();
+        for (const auto& e : result.errors) leagueMessage += e + "\n";
+        return 0;
+    }
+    leagueMessage = "League is valid: " + std::to_string(result.teams) + " teams and " + std::to_string(result.players) + " players.";
+    return 1;
+}
+
+int ExportLeagueTemplate(const char* folder) {
+    if (!folder || !database || !database->IsOpen()) { leagueMessage = "No league is loaded"; return 0; }
+    std::string error;
+    if (!bm::db::ExportLeagueTemplate(database->GetConnection(), folder, &error)) { leagueMessage = error; return 0; }
+    leagueMessage = std::string("Template written to ") + folder;
+    return 1;
+}
+
+const char* GetLeagueMessage() {
+    return leagueMessage.c_str();
+}
+
+// ---- Career: a dated year with contracts, draft, free agency, summer league and camp ----
+
+int CareerStart(const char* userTeamId, int startYear, int seed) {
+    if (!database || !database->IsOpen() || !userTeamId) { careerMessage = "The league database is not loaded"; return 0; }
+    std::vector<std::shared_ptr<bm::Team>> teams;
+    auto stmt = database->PrepareStatement("SELECT id FROM teams ORDER BY id");
+    if (stmt) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            auto team = LoadTeam(std::to_string(sqlite3_column_int(stmt, 0)).c_str());
+            if (team) teams.push_back(team);
+        }
+        sqlite3_finalize(stmt);
+    }
+    bool found = false;
+    for (const auto& t : teams) if (t->teamId == userTeamId) found = true;
+    if (teams.size() < 4 || !found) { careerMessage = "The team could not be found in this league"; return 0; }
+
+    seasonManager.reset();
+    career = std::make_unique<bm::engine::CareerManager>();
+    bm::engine::CareerManager::Config config;
+    config.userTeamId = userTeamId;
+    config.startYear = startYear;
+    config.seed = static_cast<unsigned>(seed);
+    career->Start(teams, config);
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+    careerMessage.clear();
+    return 1;
+}
+
+void CareerEnd() {
+    career.reset();
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+}
+
+const char* CareerGetStateJson() {
+    careerJson = BuildCareerJson();
+    return careerJson.c_str();
+}
+
+const char* CareerContinue() {
+    if (!career) { careerStopJson = "{\"kind\":\"none\"}"; return careerStopJson.c_str(); }
+    careerLastStop = career->Continue();
+    careerStopJson = StopJson(careerLastStop);
+    return careerStopJson.c_str();
+}
+
+const char* CareerVacation(const char* target) {
+    if (!career) { careerStopJson = "{\"kind\":\"none\"}"; return careerStopJson.c_str(); }
+    careerLastStop = career->Vacation(target ? target : "week");
+    careerStopJson = StopJson(careerLastStop);
+    return careerStopJson.c_str();
+}
+
+void CareerDismissStop() {
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+}
+
+const char* CareerGetScheduleJson() {
+    careerScheduleJson = BuildScheduleJson();
+    return careerScheduleJson.c_str();
+}
+
+// The coach's own match is always played as the engine's home side; the result is mapped back to the real venue
+int CareerBeginCoachGame() {
+    if (!career) return 0;
+    auto game = career->PendingCoachGame();
+    if (!game.pending) return 0;
+    coachGameUserHome = game.home->teamId == career->UserTeamId();
+    homeTeam = coachGameUserHome ? game.home : game.away;
+    awayTeam = coachGameUserHome ? game.away : game.home;
+    matchEngine = std::make_unique<bm::engine::MatchEngine>();
+    matchEngine->SetHeadless(true);
+    matchEngine->InitializeMatch(homeTeam, awayTeam);
+    matchEngine->SetBreaksEnabled(true);
+    UpdateStateJson();
+    return 1;
+}
+
+int CareerFinishCoachGame() {
+    if (!career || !matchEngine || !matchEngine->GetMatchState()) return 0;
+    const auto& state = *matchEngine->GetMatchState();
+    if (!state.matchComplete) return 0;
+    int home = state.homeScore;
+    int away = state.awayScore;
+    if (!coachGameUserHome) std::swap(home, away);
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+    return career->RecordCoachGame(home, away) ? 1 : 0;
+}
+
+int CareerSimCoachGame() {
+    if (!career) return 0;
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+    return career->SimulateCoachGame() ? 1 : 0;
+}
+
+const char* CareerGetContractsJson() {
+    contractsJson = BuildContractsJson();
+    return contractsJson.c_str();
+}
+
+int CareerRenew(const char* playerId, int years) {
+    if (!career || !playerId) return 0;
+    return career->RenewContract(playerId, years, &careerMessage) ? 1 : 0;
+}
+
+int CareerRelease(const char* playerId) {
+    if (!career || !playerId) return 0;
+    return career->ReleasePlayer(playerId, &careerMessage) ? 1 : 0;
+}
+
+const char* CareerGetFreeAgentsJson() {
+    freeAgentsJson = BuildFreeAgentsJson();
+    return freeAgentsJson.c_str();
+}
+
+int CareerSignFreeAgent(const char* playerId, int years) {
+    if (!career || !playerId) return 0;
+    return career->SignFreeAgent(playerId, years, &careerMessage) ? 1 : 0;
+}
+
+const char* CareerGetMessage() {
+    return careerMessage.c_str();
+}
+
+const char* CareerGetDraftJson() {
+    draftJson = BuildDraftJson();
+    return draftJson.c_str();
+}
+
+void CareerDraftAdvance() {
+    if (career) career->DraftAdvanceToUser();
+}
+
+int CareerDraftPick(const char* playerId) {
+    if (!career || !playerId) return 0;
+    return career->DraftPickUser(playerId, &careerMessage) ? 1 : 0;
+}
+
+void CareerDraftAuto() {
+    if (career) career->DraftAutoFinish();
+}
+
+const char* CareerGetSummerJson() {
+    summerJson = BuildSummerJson();
+    return summerJson.c_str();
+}
+
+void CareerSetSummerMode(int mode) {
+    if (career) career->SetSummerLeagueMode(std::clamp(mode, 0, 2));
+}
+
+void CareerSetTrainingPlan(const char* focus, int intensity, int coachDevelopment) {
+    if (career) career->SetTrainingPlan(focus ? focus : "", intensity, coachDevelopment);
+}
+
+void CareerSetMentoring(const char* mentorId, const char* menteeId) {
+    if (career) career->SetMentoring(mentorId ? mentorId : "", menteeId ? menteeId : "");
+}
+
+int CareerAssistantFillRoster() {
+    return career && career->AssistantFillRoster() ? 1 : 0;
 }
 
 } // extern "C"
