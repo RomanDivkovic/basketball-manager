@@ -43,6 +43,22 @@ public:
     // Season setup
     void InitializeSeason(int year, const std::string& leagueType); // "NBA" or "NCAA"
     void LoadTeams(const std::vector<std::shared_ptr<Team>>& teams);
+    void SetGamesPerTeam(int games) { gamesPerTeam = games; }
+    void SetScheduleSeed(unsigned seed) { scheduleSeed = seed; hasScheduleSeed = true; }
+    // Quiet = headless matches and no console output (used when a whole year is simulated)
+    void SetQuiet(bool value);
+    int GetSeasonYear() const { return seasonYear; }
+    const std::vector<std::shared_ptr<Team>>& GetTeams() const { return allTeams; }
+
+    // Plays one game between any two teams without touching standings (summer league, exhibitions)
+    std::pair<int, int> PlayStandaloneGame(const std::shared_ptr<Team>& home, const std::shared_ptr<Team>& away);
+
+    // Days where one team's game is held back so the human coach can play it
+    // Returns true when the held team has an unplayed game on that day.
+    bool PlayDayExcept(int dayNumber, const std::string& holdTeamId);
+    bool HasUnplayedGame(int dayNumber, const std::string& teamId, std::shared_ptr<Team>* home = nullptr, std::shared_ptr<Team>* away = nullptr) const;
+    bool RecordResult(int dayNumber, const std::string& homeId, const std::string& awayId, int homeScore, int awayScore);
+    bool SimulateHeldGame(int dayNumber, const std::string& teamId);
     
     // Schedule generation
     void GenerateSchedule();
@@ -121,6 +137,10 @@ public:
     bool AdvancePlayoffRound(int speedMultiplier = 6);
     bool SimulatePlayoffGame(const std::string& seriesId, int speedMultiplier = 6);
     void SimulatePlayoffs(int speedMultiplier = 6);
+
+    // Day-by-day playoffs: who plays the next game of a series, and recording its result
+    bool NextPlayoffGameTeams(const std::string& seriesId, std::shared_ptr<Team>* home, std::shared_ptr<Team>* away) const;
+    bool RecordPlayoffGame(const std::string& seriesId, int homeScore, int awayScore);
     
     // Playoff inspection
     const std::vector<PlayoffSeries>& GetPlayoffBracket() const { return playoffBracket; }
@@ -149,8 +169,14 @@ private:
     bool playoffsComplete;
     int currentPlayoffRound;
     std::shared_ptr<Team> champion;
+    int gamesPerTeam = 82;
+    unsigned scheduleSeed = 0;
+    bool hasScheduleSeed = false;
+    bool quiet = false;
 
     void BuildFixtureDays();
+    void PackFixtureDays();
+    void SimulateGameInPlace(Game& game);
     
     // Standings helpers
     void UpdateStandings(const Game& game);

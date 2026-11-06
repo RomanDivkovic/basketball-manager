@@ -1,7 +1,16 @@
 #include "bindings/UnityBridge.h"
 #include "engine/MatchEngine.h"
+#include "engine/CareerManager.h"
+#include "db/DatabaseManager.h"
+#include "db/LeagueImport.h"
 #include "common/Types.h"
 #include <iostream>
+#include <random>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -507,6 +516,412 @@ void TestBridgeSeasonAndPlayoffs() {
     g_testsPassed++;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Career: a dated year
+// ---------------------------------------------------------------------------------------------
+
+using bm::engine::CareerManager;
+using bm::engine::CareerPhase;
+using bm::engine::CareerStop;
+using bm::engine::DaysFromCivil;
+
+static std::vector<std::shared_ptr<bm::Team>> CreateLeague(int teamCount, unsigned seed, int rosterSize = 15) {
+    std::mt19937 rng(seed);
+    std::vector<std::shared_ptr<bm::Team>> teams;
+    const bm::Position positions[] = { bm::Position::PG, bm::Position::SG, bm::Position::SF, bm::Position::PF, bm::Position::C };
+    for (int t = 0; t < teamCount; ++t) {
+        auto team = std::make_shared<bm::Team>();
+        team->teamId = std::to_string(t + 1);
+        team->name = "Team " + team->teamId;
+        team->conferenceId = t < teamCount / 2 ? "Eastern" : "Western";
+        team->prestige = 10;
+        team->active = true;
+        for (int i = 0; i < rosterSize; ++i) {
+            auto p = std::make_shared<bm::Player>();
+            p->playerId = team->teamId + "_" + std::to_string(i + 1);
+            p->firstName = "P" + std::to_string(i + 1);
+            p->lastName = "T" + team->teamId;
+            p->position = positions[i % 5];
+            p->jerseyNumber = i + 1;
+            const int ability = 70 + static_cast<int>(rng() % 20) - i;
+            p->attributes.currentAbility = ability;
+            p->attributes.potentialAbility = ability + static_cast<int>(rng() % 8);
+            p->attributes.pace = p->attributes.shooting = p->attributes.ballControl = ability / 5;
+            p->attributes.defense = p->attributes.physical = p->attributes.technical = ability / 5;
+            p->birthDate = "2000-01-01";
+            p->active = true;
+            team->roster.push_back(p);
+        }
+        teams.push_back(team);
+    }
+    return teams;
+}
+
+static void ScriptedCoach(CareerManager& c, const CareerStop& stop) {
+    if (stop.kind == "coach_game") {
+        c.SimulateCoachGame();
+    } else if (stop.kind == "draft") {
+        c.DraftAdvanceToUser();
+        while (c.UserOnClock() && !c.Prospects().empty()) {
+            std::string message;
+            c.DraftPickUser(c.Prospects().front()->playerId, &message);
+        }
+    } else if (stop.kind == "summer_choice") {
+        c.SetSummerLeagueMode(2);
+    } else if (stop.kind == "camp_plan") {
+        c.SetTrainingPlan("Shooting", 2, 70);
+    } else if (stop.kind == "roster_check") {
+        c.AssistantFillRoster();
+    }
+}
+
+static int MaxPlayersOnATeam(const std::vector<std::shared_ptr<bm::Team>>& teams) {
+    size_t most = 0;
+    for (const auto& t : teams) most = std::max(most, t->roster.size());
+    return static_cast<int>(most);
+}
+
+static int MinPlayersOnATeam(const std::vector<std::shared_ptr<bm::Team>>& teams) {
+    size_t least = 1000;
+    for (const auto& t : teams) least = std::min(least, t->roster.size());
+    return static_cast<int>(least);
+}
+
+void TestYearScheduleIsAFullSeason() {
+    std::cout << "[TEST] Schedule: every team plays 82 games over a full season...\n";
+    auto league = CreateLeague(30, 7);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 42;
+    career.Start(league, cfg);
+
+    const auto& season = career.Season();
+    TEST_ASSERT(season.GetFixtureDayCount() >= 170 && season.GetFixtureDayCount() <= 190, "The season must span about 175 days");
+    TEST_ASSERT(season.GetTotalGames() == 30 * 82 / 2, "A 30-team league plays 1230 games");
+
+    std::map<std::string, int> games;
+    std::map<std::string, int> sameConference;
+    for (int d = 1; d <= season.GetFixtureDayCount(); ++d) {
+        std::set<std::string> busy;
+        for (const auto& g : season.GetFixturesForDay(d)) {
+            TEST_ASSERT(busy.insert(g.homeTeam->teamId).second && busy.insert(g.awayTeam->teamId).second, "No team plays twice on one day");
+            ++games[g.homeTeam->teamId];
+            ++games[g.awayTeam->teamId];
+            if (g.homeTeam->conferenceId == g.awayTeam->conferenceId) {
+                ++sameConference[g.homeTeam->teamId];
+                ++sameConference[g.awayTeam->teamId];
+            }
+        }
+    }
+    for (const auto& t : league) {
+        TEST_ASSERT(games[t->teamId] == 82, "Every team plays exactly 82 games");
+        TEST_ASSERT(sameConference[t->teamId] == 52, "52 of the 82 games are against the own conference");
+    }
+    g_testsPassed++;
+}
+
+void TestCareerYearFlow() {
+    std::cout << "[TEST] Career: a dated year from preseason to the next preseason...\n";
+    auto league = CreateLeague(30, 7);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 42;
+    career.Start(league, cfg);
+    TEST_ASSERT(career.Phase() == CareerPhase::Preseason, "A career starts in the preseason");
+    TEST_ASSERT(career.Today() == DaysFromCivil(2026, 10, 1), "The year starts on 1 October");
+
+    std::map<std::string, int> firstDay;
+    std::vector<std::string> order;
+    bool playoffsHiddenInSummer = true;
+    bool openingNightOnTime = true;
+    int firstMatchDay = 0;
+    std::string championAtSeasonEnd;
+    for (int guard = 0; guard < 600 && career.SeasonYear() == 2026; ++guard) {
+        CareerStop stop = career.Continue();
+        if (stop.kind != "coach_game" && !firstDay.count(stop.kind)) {
+            firstDay[stop.kind] = career.Today();
+            order.push_back(stop.kind);
+        }
+        if (stop.kind == "season_end") championAtSeasonEnd = career.ChampionName();
+        if (stop.kind == "coach_game" && career.Phase() == CareerPhase::RegularSeason) {
+            if (firstMatchDay == 0) firstMatchDay = career.Today();
+            openingNightOnTime = openingNightOnTime && career.Today() == DaysFromCivil(2026, 10, 21) + career.RegularSeasonDay() - 1;
+        }
+        if ((career.Phase() == CareerPhase::Offseason || career.Phase() == CareerPhase::Review) && career.PlayoffsVisible()) playoffsHiddenInSummer = false;
+        ScriptedCoach(career, stop);
+    }
+    TEST_ASSERT(career.SeasonYear() == 2027, "The calendar must roll over into the next season");
+    TEST_ASSERT(openingNightOnTime && firstMatchDay >= DaysFromCivil(2026, 10, 21), "The regular season opens on 21 October and day n is the n-th date");
+    TEST_ASSERT(playoffsHiddenInSummer, "The playoffs are only visible while they are played");
+
+    TEST_ASSERT(firstDay.count("season_end") && !championAtSeasonEnd.empty(), "The season end is reported with a champion");
+    TEST_ASSERT(firstDay["draft"] == DaysFromCivil(2027, 6, 25), "The draft is on 25 June");
+    TEST_ASSERT(firstDay["free_agency"] == DaysFromCivil(2027, 7, 1), "Free agency opens on 1 July");
+    TEST_ASSERT(firstDay["summer_choice"] == DaysFromCivil(2027, 7, 3), "Summer League starts on 3 July");
+    TEST_ASSERT(firstDay["camp_plan"] == DaysFromCivil(2027, 9, 28), "Training camp starts on 28 September");
+    TEST_ASSERT(firstDay["new_season"] == DaysFromCivil(2027, 10, 1), "The next season starts on 1 October");
+    auto position = [&](const std::string& kind) { return std::find(order.begin(), order.end(), kind) - order.begin(); };
+    TEST_ASSERT(position("season_end") < position("draft") && position("draft") < position("free_agency")
+             && position("free_agency") < position("summer_choice") && position("summer_choice") < position("camp_plan")
+             && position("camp_plan") < position("new_season"), "The offseason events come in calendar order");
+
+    // The next season opens with legal rosters everywhere
+    for (int guard = 0; guard < 100 && career.Phase() != CareerPhase::RegularSeason; ++guard) {
+        ScriptedCoach(career, career.Continue());
+    }
+    TEST_ASSERT(career.Phase() == CareerPhase::RegularSeason, "The 2027/28 season must start");
+    TEST_ASSERT(MinPlayersOnATeam(league) >= 13 && MaxPlayersOnATeam(league) <= 15, "Every roster is between 13 and 15 on opening night");
+    g_testsPassed++;
+}
+
+void TestVacationLetsTheAssistantRunTheClub() {
+    std::cout << "[TEST] Career: the assistant runs the club on vacation...\n";
+    auto league = CreateLeague(30, 11);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "3";
+    cfg.seed = 9;
+    career.Start(league, cfg);
+
+    CareerStop back = career.Vacation("new_season");
+    TEST_ASSERT(back.kind == "vacation_ended", "A vacation ends with a report");
+    TEST_ASSERT(career.SeasonYear() == 2027 && career.Phase() == CareerPhase::Preseason, "The vacation ends when the new season starts");
+    TEST_ASSERT(career.Today() == DaysFromCivil(2027, 10, 1), "...on 1 October");
+
+    // The assistant played the whole year: contracts were handled and nothing is blocked
+    back = career.Vacation("month");
+    TEST_ASSERT(career.Phase() == CareerPhase::RegularSeason, "A month later the season is under way");
+    TEST_ASSERT(MinPlayersOnATeam(league) >= 13 && MaxPlayersOnATeam(league) <= 15, "The assistant keeps the roster legal");
+    TEST_ASSERT(career.CurrentStop().kind == "none" || !career.CurrentStop().blocking || career.CurrentStop().kind == "coach_game",
+                "Nothing but a match day is waiting after a vacation");
+    auto weekBack = career.Vacation("week");
+    TEST_ASSERT(weekBack.kind == "vacation_ended", "A week-long vacation also reports back");
+    g_testsPassed++;
+}
+
+void TestCoachGameCanBePlayedLive() {
+    std::cout << "[TEST] Career: the coach's live result is recorded in the standings...\n";
+    auto league = CreateLeague(30, 5);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 1;
+    career.Start(league, cfg);
+
+    CareerStop stop = career.Continue();
+    TEST_ASSERT(stop.kind == "coach_game" && stop.blocking, "The first stop is the coach's match");
+    TEST_ASSERT(career.Continue().kind == "coach_game", "Time does not move past an unplayed match");
+    auto game = career.PendingCoachGame();
+    TEST_ASSERT(game.pending && game.home && game.away, "The pending match names both teams");
+    const std::string homeId = game.home->teamId;
+    const std::string awayId = game.away->teamId;
+    TEST_ASSERT(homeId == "1" || awayId == "1", "The pending match is the coach's own");
+
+    TEST_ASSERT(career.RecordCoachGame(101, 95), "The live result can be recorded");
+    TEST_ASSERT(!career.PendingCoachGame().pending, "The match is no longer pending");
+    int homeWins = 0;
+    int awayLosses = 0;
+    for (const auto& rec : career.Season().GetStandings("")) {
+        if (rec.team->teamId == homeId) homeWins = rec.wins;
+        if (rec.team->teamId == awayId) awayLosses = rec.losses;
+    }
+    TEST_ASSERT(homeWins == 1 && awayLosses == 1, "The standings show the recorded result");
+    TEST_ASSERT(career.Continue().kind == "coach_game" && career.Today() > DaysFromCivil(2026, 10, 21), "Time moves on to the next match day");
+    g_testsPassed++;
+}
+
+void TestContractsAndFreeAgencyRules() {
+    std::cout << "[TEST] Career: roster limits, renewals, the salary cap and free agents...\n";
+    auto league = CreateLeague(30, 13);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "2";
+    cfg.seed = 21;
+    career.Start(league, cfg);
+    auto team = career.UserTeam();
+
+    // Releasing is limited by the 13-man minimum in season phases
+    std::string message;
+    TEST_ASSERT(career.ReleasePlayer(team->roster.back()->playerId, &message), "A 15-man roster can release a player");
+    TEST_ASSERT(career.ReleasePlayer(team->roster.back()->playerId, &message), "...and another down to 13");
+    TEST_ASSERT(!career.ReleasePlayer(team->roster.back()->playerId, &message), "...but not below 13 before the season");
+    TEST_ASSERT(!career.FreeAgents().empty(), "Released players become free agents");
+
+    // Only players with an expiring contract can be renewed
+    std::shared_ptr<bm::Player> runningDeal;
+    std::shared_ptr<bm::Player> expiring;
+    for (const auto& p : team->roster) {
+        if (p->contractEndYear > career.SeasonYear()) runningDeal = p;
+        else expiring = p;
+    }
+    TEST_ASSERT(runningDeal && expiring, "A roster has both running and expiring contracts");
+    TEST_ASSERT(!career.RenewContract(runningDeal->playerId, 3, &message), "A running contract cannot be renewed yet");
+    const int before = expiring->salary;
+    TEST_ASSERT(career.RenewContract(expiring->playerId, 3, &message), "An expiring contract can be renewed");
+    TEST_ASSERT(expiring->contractEndYear == career.SeasonYear() + 3 && expiring->salary > 0 && before > 0, "The renewal sets a new end year and salary");
+
+    // Free agency: the cap decides who can be signed; players asking the minimum always can
+    career.Vacation("free_agency");
+    TEST_ASSERT(career.FreeAgencyOpen(), "Free agency is open on 1 July");
+    TEST_ASSERT(career.FreeAgents().size() > 10, "Expired contracts feed the market");
+    std::shared_ptr<bm::Player> star;
+    std::shared_ptr<bm::Player> bargain;
+    const int room = career.SalaryCap() - career.Payroll("2");
+    for (const auto& p : career.FreeAgents()) {
+        const int ask = career.Quote(*p, career.PreferredYears(*p), false);
+        if (ask > room && ask > CareerManager::MinimumSalary() && (!star || p->attributes.currentAbility > star->attributes.currentAbility)) star = p;
+        if (ask <= CareerManager::MinimumSalary()) bargain = p;
+    }
+    if (star) TEST_ASSERT(!career.SignFreeAgent(star->playerId, career.PreferredYears(*star), &message), "A player above the cap room cannot be signed");
+    if (bargain) {
+        const size_t size = team->roster.size();
+        TEST_ASSERT(career.SignFreeAgent(bargain->playerId, 1, &message), "A minimum-salary player can always be signed");
+        TEST_ASSERT(team->roster.size() == size + 1, "The signing joins the roster");
+        TEST_ASSERT(std::find(career.FreeAgents().begin(), career.FreeAgents().end(), bargain) == career.FreeAgents().end(), "...and leaves the market");
+    }
+    g_testsPassed++;
+}
+
+void TestDraftHasSixtyPicks() {
+    std::cout << "[TEST] Career: the draft has two rounds and the coach picks for his team...\n";
+    auto league = CreateLeague(30, 17);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "4";
+    cfg.seed = 33;
+    career.Start(league, cfg);
+    career.Vacation("draft");
+    TEST_ASSERT(career.Phase() == CareerPhase::Draft && career.Today() == DaysFromCivil(2027, 6, 25), "It is draft day");
+    TEST_ASSERT(career.DraftReady() && career.DraftTotalPicks() == 60, "Two rounds of 30 picks");
+    TEST_ASSERT(career.CurrentStop().kind == "draft" && career.CurrentStop().blocking, "The draft needs the coach");
+
+    auto team = career.UserTeam();
+    const size_t before = team->roster.size();
+    career.DraftAdvanceToUser();
+    int picks = 0;
+    while (career.UserOnClock() && !career.Prospects().empty()) {
+        std::string message;
+        TEST_ASSERT(career.DraftPickUser(career.Prospects().front()->playerId, &message), "The coach can make his pick");
+        ++picks;
+    }
+    TEST_ASSERT(career.DraftFinished(), "The draft finishes after the coach's picks");
+    TEST_ASSERT(picks == 2 && team->roster.size() == before + 2, "The coach drafted two players");
+    std::set<std::string> unique;
+    for (const auto& r : career.DraftResults()) unique.insert(r.playerId);
+    TEST_ASSERT(career.DraftResults().size() == 60 && unique.size() == 60, "Sixty different players were drafted");
+    TEST_ASSERT(career.CurrentStop().kind != "draft", "The draft no longer blocks time");
+    g_testsPassed++;
+}
+
+void TestProgressionFollowsAge() {
+    std::cout << "[TEST] Career: young players improve and veterans decline over a year...\n";
+    auto league = CreateLeague(30, 19);
+    std::vector<std::shared_ptr<bm::Player>> young;
+    std::vector<std::shared_ptr<bm::Player>> old;
+    for (const auto& team : league) {
+        for (size_t i = 0; i < team->roster.size(); ++i) {
+            auto& p = team->roster[i];
+            if (i % 3 == 0) { p->birthDate = "2006-05-05"; p->attributes.potentialAbility = p->attributes.currentAbility + 10; young.push_back(p); }
+            else if (i % 3 == 1) { p->birthDate = "1992-05-05"; p->attributes.potentialAbility = p->attributes.currentAbility; old.push_back(p); }
+            else { p->birthDate = "1999-05-05"; }
+        }
+    }
+    std::map<std::string, int> startRating;
+    for (const auto& p : young) startRating[p->playerId] = p->attributes.currentAbility;
+    for (const auto& p : old) startRating[p->playerId] = p->attributes.currentAbility;
+
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 4;
+    career.Start(league, cfg);
+    career.Vacation("new_season");
+
+    auto average = [&](const std::vector<std::shared_ptr<bm::Player>>& group) {
+        double sum = 0;
+        for (const auto& p : group) sum += p->attributes.currentAbility - startRating[p->playerId];
+        return sum / group.size();
+    };
+    const double youngChange = average(young);
+    const double oldChange = average(old);
+    std::cout << "  -> average change: young " << youngChange << ", veterans " << oldChange << "\n";
+    TEST_ASSERT(youngChange > 1.0, "Young players improve");
+    TEST_ASSERT(oldChange < -0.5, "Veterans decline");
+    g_testsPassed++;
+}
+
+static std::string WriteLeagueCsv(const std::string& folder, int teams, int playersPerTeam, bool breakIt) {
+    std::filesystem::create_directories(folder);
+    std::ofstream t(folder + "/teams.csv");
+    t << "name,conference,prestige\n";
+    for (int i = 0; i < teams; ++i) t << "Club " << i + 1 << "," << (i < teams / 2 ? "Eastern" : "Western") << "," << 10 << "\n";
+    std::ofstream p(folder + "/players.csv");
+    p << "team,first_name,last_name,position,jersey_number,current_ability,potential_ability\n";
+    const char* positions[] = {"PG", "SG", "SF", "PF", "C"};
+    for (int i = 0; i < teams; ++i) {
+        for (int k = 0; k < playersPerTeam; ++k) {
+            p << "Club " << i + 1 << ",First" << k << ",\"Last, " << i << "x" << k << "\"," << positions[k % 5] << "," << k + 1 << "," << 65 + (k * 3 + i) % 25 << "," << 75 << "\n";
+        }
+    }
+    if (breakIt) p << "Nowhere FC,Bad,Line,XX,1,80,80\n";
+    return folder;
+}
+
+void TestCustomLeagueFiles() {
+    std::cout << "[TEST] League files: a custom league is validated, imported and playable...\n";
+    const std::string base = (std::filesystem::temp_directory_path() / "bm_league_test").string();
+    std::filesystem::remove_all(base);
+
+    // Valid league: 16 clubs, quoted names with commas
+    const std::string good = WriteLeagueCsv(base + "/good", 16, 10, false);
+    auto result = bm::db::ImportLeagueFromCsv(good, base + "/good.db");
+    TEST_ASSERT(result.ok && result.teams == 16 && result.players == 160, "A valid league imports");
+    {
+        bm::db::DatabaseManager db;
+        TEST_ASSERT(db.Open(base + "/good.db"), "The imported league opens");
+        auto st = db.PrepareStatement("SELECT COUNT(*) FROM players WHERE last_name LIKE 'Last, %'");
+        TEST_ASSERT(st && sqlite3_step(st) == SQLITE_ROW && sqlite3_column_int(st, 0) == 160, "Quoted fields keep their commas");
+        sqlite3_finalize(st);
+
+        // The default league can be exported as a template and imported again
+        std::string error;
+        std::filesystem::create_directories(base + "/export");
+        TEST_ASSERT(bm::db::ExportLeagueTemplate(db.GetConnection(), base + "/export", &error), "A template can be exported");
+    }
+    auto again = bm::db::ImportLeagueFromCsv(base + "/export", base + "/again.db");
+    TEST_ASSERT(again.ok && again.teams == 16 && again.players == 160, "An exported league imports again unchanged");
+
+    // Mistakes are reported with their line
+    auto bad = bm::db::ImportLeagueFromCsv(WriteLeagueCsv(base + "/bad", 16, 10, true), base + "/bad.db");
+    TEST_ASSERT(!bad.ok && !bad.errors.empty(), "A broken file is rejected");
+    TEST_ASSERT(bad.errors.front().find("players.csv line") != std::string::npos, "The error names the line");
+    TEST_ASSERT(!std::filesystem::exists(base + "/bad.db"), "Nothing is written for an invalid league");
+    auto small = bm::db::ImportLeagueFromCsv(WriteLeagueCsv(base + "/small", 10, 10, false), base + "/small.db");
+    TEST_ASSERT(!small.ok, "Fewer than 16 teams are rejected");
+    auto missing = bm::db::ImportLeagueFromCsv(base + "/nothing", base + "/missing.db");
+    TEST_ASSERT(!missing.ok, "A missing folder is rejected");
+
+    // The custom league is playable through the bridge, including clubs with only ten players
+    LoadDatabase((base + "/good.db").c_str());
+    TEST_ASSERT(CareerStart("1", 2026, 7) == 1, "A career can start in the custom league");
+    const std::string state = CareerGetStateJson();
+    TEST_ASSERT(state.find("\"started\":true") != std::string::npos && state.find("\"phase\":\"Preseason\"") != std::string::npos, "The state shows the preseason");
+    CareerVacation("season_end");
+    const std::string review = CareerGetStateJson();
+    TEST_ASSERT(review.find("\"phase\":\"Post-season\"") != std::string::npos, "The assistant played a whole season in the custom league");
+    TEST_ASSERT(review.find("\"champion\":\"Club") != std::string::npos, "A champion was crowned");
+    CareerVacation("new_season");
+    CareerVacation("month");
+    const std::string next = CareerGetStateJson();
+    TEST_ASSERT(next.find("\"rosterSize\":1") != std::string::npos, "Rosters were filled to a legal size for the next season");
+    CareerEnd();
+    std::filesystem::remove_all(base);
+    g_testsPassed++;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "  Basketball Manager Core Automated Tests\n";
@@ -520,6 +935,14 @@ int main() {
     TestTeamTalkFitsTheSituation();
     TestOffenseSchemesPlaybookAndFeedback();
     TestBridgeSeasonAndPlayoffs();
+    TestYearScheduleIsAFullSeason();
+    TestCareerYearFlow();
+    TestVacationLetsTheAssistantRunTheClub();
+    TestCoachGameCanBePlayedLive();
+    TestContractsAndFreeAgencyRules();
+    TestDraftHasSixtyPicks();
+    TestProgressionFollowsAge();
+    TestCustomLeagueFiles();
 
     std::cout << "\n----------------------------------------\n";
     std::cout << "Results: " << g_testsPassed << " passed, " << g_testsFailed << " failed.\n";

@@ -9,10 +9,40 @@
 #include <numeric>
 #include <cmath>
 #include <unordered_set>
+#include <unordered_map>
+#include <streambuf>
 #include <optional>
 
 namespace bm {
 namespace engine {
+
+namespace {
+
+class NullBuffer : public std::streambuf {
+protected:
+    int overflow(int c) override { return c; }
+    std::streamsize xsputn(const char*, std::streamsize n) override { return n; }
+};
+
+// Mutes std::cout while a whole year of matches runs
+class CoutSilencer {
+public:
+    explicit CoutSilencer(bool enable) : enabled(enable) {
+        if (enabled) previous = std::cout.rdbuf(&sink);
+    }
+    ~CoutSilencer() {
+        if (enabled) std::cout.rdbuf(previous);
+    }
+    CoutSilencer(const CoutSilencer&) = delete;
+    CoutSilencer& operator=(const CoutSilencer&) = delete;
+
+private:
+    bool enabled;
+    NullBuffer sink;
+    std::streambuf* previous = nullptr;
+};
+
+} // namespace
 
 SeasonManager::SeasonManager()
     : seasonYear(2025), leagueType("NBA"), gamesPlayed(0), totalGames(0),
@@ -67,98 +97,164 @@ void SeasonManager::GenerateSchedule() {
 }
 
 void SeasonManager::GenerateNBASchedule() {
+    CoutSilencer silence(quiet);
     schedule.clear();
     fixtureDays.clear();
 
-    const int targetGamesPerTeam = 82;
-    const int totalTeams = static_cast<int>(allTeams.size());
-    if (totalTeams < 2) {
+    const int n = static_cast<int>(allTeams.size());
+    if (n < 2) {
         return;
     }
 
-    std::vector<int> gamesRemaining(totalTeams, targetGamesPerTeam);
-    std::vector<std::pair<int, int>> allPairs;
-    for (int i = 0; i < totalTeams; ++i) {
-        for (int j = i + 1; j < totalTeams; ++j) {
-            allPairs.emplace_back(i, j);
+    // Every pair meets baseRounds times; the remaining games per team are spread over a regular
+    // pairing graph so that every team ends on exactly gamesPerTeam games.
+    std::vector<std::vector<int>> count(n, std::vector<int>(n, 0));
+    const int baseRounds = gamesPerTeam / (n - 1);
+    int extra = gamesPerTeam - baseRounds * (n - 1);
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            count[i][j] = count[j][i] = baseRounds;
         }
     }
-
-    std::map<std::pair<int, int>, int> pairCounts;
-    for (const auto& pair : allPairs) {
-        pairCounts[pair] = 2;
-        gamesRemaining[pair.first] -= 2;
-        gamesRemaining[pair.second] -= 2;
+    if ((extra * n) % 2 != 0) {
+        --extra;   // an odd number of teams cannot all take an odd number of extra games
     }
 
-    for (const auto& pair : allPairs) {
-        int i = pair.first;
-        int j = pair.second;
-        while (gamesRemaining[i] > 0 && gamesRemaining[j] > 0 && pairCounts[pair] < 4) {
-            Game g;
-            if (pairCounts[pair] % 2 == 0) {
-                g.homeTeam = allTeams[i];
-                g.awayTeam = allTeams[j];
-            } else {
-                g.homeTeam = allTeams[j];
-                g.awayTeam = allTeams[i];
-            }
-            schedule.push_back(g);
-            pairCounts[pair]++;
-            gamesRemaining[i]--;
-            gamesRemaining[j]--;
-        }
+    auto addPair = [&](int a, int b, int k) {
+        count[a][b] += k;
+        count[b][a] += k;
+    };
+
+    std::map<std::string, std::vector<int>> conferences;
+    for (int i = 0; i < n; ++i) {
+        conferences[allTeams[i]->conferenceId].push_back(i);
     }
 
-    // Fill remaining games while keeping every team at 82 games exactly.
-    int maxAttempts = 50000;
-    while (maxAttempts-- > 0) {
-        bool done = true;
-        for (int t = 0; t < totalTeams; ++t) {
-            if (gamesRemaining[t] > 0) {
-                done = false;
-                break;
-            }
+    bool placed = (extra == 0);
+    if (!placed && extra % 4 == 0) {
+        // Prefer same-conference rivals: each offset adds two games against two opponents
+        const int offsets = extra / 4;
+        bool feasible = true;
+        for (const auto& entry : conferences) {
+            if (static_cast<int>(entry.second.size()) < 2 * offsets + 1) feasible = false;
         }
-        if (done) break;
-
-        bool madeProgress = false;
-        for (int i = 0; i < totalTeams; ++i) {
-            if (gamesRemaining[i] <= 0) continue;
-            for (int j = 0; j < totalTeams; ++j) {
-                if (i == j || gamesRemaining[j] <= 0) continue;
-                auto pairKey = std::make_pair(std::min(i, j), std::max(i, j));
-                if (pairCounts[pairKey] >= 4) continue;
-
-                Game g;
-                if ((pairCounts[pairKey] + 1) % 2 == 0) {
-                    g.homeTeam = allTeams[i];
-                    g.awayTeam = allTeams[j];
-                } else {
-                    g.homeTeam = allTeams[j];
-                    g.awayTeam = allTeams[i];
-                }
-                schedule.push_back(g);
-                pairCounts[pairKey]++;
-                gamesRemaining[i]--;
-                gamesRemaining[j]--;
-                madeProgress = true;
-
-                if (gamesRemaining[i] <= 0) {
-                    break;
+        if (feasible) {
+            for (const auto& entry : conferences) {
+                const auto& members = entry.second;
+                const int m = static_cast<int>(members.size());
+                for (int s = 1; s <= offsets; ++s) {
+                    for (int k = 0; k < m; ++k) {
+                        addPair(members[k], members[(k + s) % m], 2);
+                    }
                 }
             }
+            placed = true;
         }
-        if (!madeProgress) {
-            // Break if no valid pairs remaining under max constraints
-            break;
+    }
+    if (!placed) {
+        for (int s = 1; s <= extra / 2; ++s) {
+            for (int k = 0; k < n; ++k) addPair(k, (k + s) % n, 1);
+        }
+        if (extra % 2 == 1) {
+            for (int k = 0; k < n / 2; ++k) addPair(k, k + n / 2, 1);
         }
     }
 
-    std::mt19937 gen(static_cast<unsigned int>(std::random_device{}()));
-    std::shuffle(schedule.begin(), schedule.end(), gen);
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            const bool lowFirst = ((i + j) % 2 == 0);
+            for (int g = 0; g < count[i][j]; ++g) {
+                const bool lowHome = (g % 2 == 0) ? lowFirst : !lowFirst;
+                Game game;
+                game.homeTeam = allTeams[lowHome ? i : j];
+                game.awayTeam = allTeams[lowHome ? j : i];
+                schedule.push_back(game);
+            }
+        }
+    }
+
+    PackFixtureDays();
     totalGames = static_cast<int>(schedule.size());
-    BuildFixtureDays();
+}
+
+// Spreads the game pool over the season so that no team plays twice a day and every team
+// finishes at the same time.
+void SeasonManager::PackFixtureDays() {
+    fixtureDays.clear();
+    const int n = static_cast<int>(allTeams.size());
+    if (schedule.empty() || n < 2) return;
+
+    std::mt19937 rng(hasScheduleSeed ? scheduleSeed : static_cast<unsigned>(std::random_device{}()));
+    std::unordered_map<std::string, int> index;
+    for (int i = 0; i < n; ++i) index[allTeams[i]->teamId] = i;
+
+    std::vector<Game> pool = schedule;
+    std::shuffle(pool.begin(), pool.end(), rng);
+
+    std::vector<int> remaining(n, 0);
+    for (const auto& g : pool) {
+        ++remaining[index[g.homeTeam->teamId]];
+        ++remaining[index[g.awayTeam->teamId]];
+    }
+    const int capacity = n / 2;
+    const int maxRemaining = *std::max_element(remaining.begin(), remaining.end());
+    int seasonDays = std::max(30, static_cast<int>(std::ceil(maxRemaining * 2.15)));
+    seasonDays = std::max(seasonDays, static_cast<int>(std::ceil(static_cast<double>(pool.size()) / capacity)));
+
+    std::vector<char> playedYesterday(n, 0);
+    std::uniform_real_distribution<double> noise(0.0, 0.35);
+    int day = 0;
+    while (!pool.empty() && day < seasonDays + 400) {
+        const int daysLeft = std::max(1, seasonDays - day);
+        const int target = std::min(capacity, static_cast<int>(std::ceil(static_cast<double>(pool.size()) / daysLeft)));
+
+        std::vector<std::pair<double, size_t>> scored;
+        scored.reserve(pool.size());
+        for (size_t k = 0; k < pool.size(); ++k) {
+            const int h = index[pool[k].homeTeam->teamId];
+            const int a = index[pool[k].awayTeam->teamId];
+            const double uh = static_cast<double>(remaining[h]) / daysLeft;
+            const double ua = static_cast<double>(remaining[a]) / daysLeft;
+            double score = uh + ua + noise(rng) - 0.3 * (playedYesterday[h] + playedYesterday[a]);
+            if (uh >= 1.0 || ua >= 1.0) score += 10.0;   // a team that must play every remaining day goes first
+            scored.emplace_back(score, k);
+        }
+        std::sort(scored.begin(), scored.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+
+        FixtureDay fd;
+        fd.dayNumber = day + 1;
+        fd.label = "Day " + std::to_string(fd.dayNumber);
+        std::vector<char> busy(n, 0);
+        std::vector<char> taken(pool.size(), 0);
+        for (const auto& entry : scored) {
+            if (static_cast<int>(fd.games.size()) >= capacity) break;
+            if (static_cast<int>(fd.games.size()) >= target && entry.first < 10.0) break;
+            const size_t k = entry.second;
+            const int h = index[pool[k].homeTeam->teamId];
+            const int a = index[pool[k].awayTeam->teamId];
+            if (busy[h] || busy[a]) continue;
+            busy[h] = busy[a] = 1;
+            taken[k] = 1;
+            --remaining[h];
+            --remaining[a];
+            fd.games.push_back(pool[k]);
+        }
+
+        std::vector<Game> rest;
+        rest.reserve(pool.size());
+        for (size_t k = 0; k < pool.size(); ++k) {
+            if (!taken[k]) rest.push_back(pool[k]);
+        }
+        pool.swap(rest);
+        playedYesterday = busy;
+        fixtureDays.push_back(std::move(fd));
+        ++day;
+    }
+
+    schedule.clear();
+    for (const auto& fd : fixtureDays) {
+        for (const auto& g : fd.games) schedule.push_back(g);
+    }
 }
 
 void SeasonManager::GenerateNCAASchedule() {
@@ -262,6 +358,95 @@ const SeasonManager::FixtureDay* SeasonManager::GetFixtureDay(int dayNumber) con
         return nullptr;
     }
     return &fixtureDays[index];
+}
+
+void SeasonManager::SetQuiet(bool value) {
+    quiet = value;
+    if (matchEngine) matchEngine->SetHeadless(value);
+}
+
+void SeasonManager::SimulateGameInPlace(Game& game) {
+    CoutSilencer silence(quiet);
+    matchEngine->SetPauseEnabled(false);
+    matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
+    matchEngine->SimulateFullMatch();
+    auto state = matchEngine->GetMatchState();
+    game.homeScore = state->homeScore;
+    game.awayScore = state->awayScore;
+    game.played = true;
+}
+
+std::pair<int, int> SeasonManager::PlayStandaloneGame(const std::shared_ptr<Team>& home, const std::shared_ptr<Team>& away) {
+    Game game;
+    game.homeTeam = home;
+    game.awayTeam = away;
+    SimulateGameInPlace(game);
+    return {game.homeScore, game.awayScore};
+}
+
+bool SeasonManager::HasUnplayedGame(int dayNumber, const std::string& teamId, std::shared_ptr<Team>* home, std::shared_ptr<Team>* away) const {
+    const FixtureDay* day = GetFixtureDay(dayNumber);
+    if (!day || dayNumber < 1) return false;
+    for (const auto& g : day->games) {
+        if (g.played) continue;
+        if (g.homeTeam->teamId == teamId || g.awayTeam->teamId == teamId) {
+            if (home) *home = g.homeTeam;
+            if (away) *away = g.awayTeam;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SeasonManager::PlayDayExcept(int dayNumber, const std::string& holdTeamId) {
+    if (dayNumber < 1 || dayNumber > static_cast<int>(fixtureDays.size())) return false;
+    auto& day = fixtureDays[dayNumber - 1];
+    bool held = false;
+    for (auto& game : day.games) {
+        if (game.played) continue;
+        if (!holdTeamId.empty() && (game.homeTeam->teamId == holdTeamId || game.awayTeam->teamId == holdTeamId)) {
+            held = true;
+            continue;
+        }
+        SimulateGameInPlace(game);
+        UpdateStandings(game);
+        ++gamesPlayed;
+    }
+    if (!held) day.simulated = true;
+    CalculateWinPercentages();
+    return held;
+}
+
+bool SeasonManager::RecordResult(int dayNumber, const std::string& homeId, const std::string& awayId, int homeScore, int awayScore) {
+    if (dayNumber < 1 || dayNumber > static_cast<int>(fixtureDays.size())) return false;
+    auto& day = fixtureDays[dayNumber - 1];
+    bool allPlayed = true;
+    bool recorded = false;
+    for (auto& game : day.games) {
+        if (!recorded && !game.played && game.homeTeam->teamId == homeId && game.awayTeam->teamId == awayId) {
+            game.homeScore = homeScore;
+            game.awayScore = awayScore;
+            game.played = true;
+            UpdateStandings(game);
+            ++gamesPlayed;
+            recorded = true;
+        }
+        if (!game.played) allPlayed = false;
+    }
+    if (recorded && allPlayed) day.simulated = true;
+    CalculateWinPercentages();
+    return recorded;
+}
+
+bool SeasonManager::SimulateHeldGame(int dayNumber, const std::string& teamId) {
+    std::shared_ptr<Team> home;
+    std::shared_ptr<Team> away;
+    if (!HasUnplayedGame(dayNumber, teamId, &home, &away)) return false;
+    Game game;
+    game.homeTeam = home;
+    game.awayTeam = away;
+    SimulateGameInPlace(game);
+    return RecordResult(dayNumber, home->teamId, away->teamId, game.homeScore, game.awayScore);
 }
 
 bool SeasonManager::SimulateDay(int dayNumber, bool autoSimComputerGames, const std::shared_ptr<Team>& managedTeam, bool interactiveManagedGame, int speedMultiplier) {
@@ -633,68 +818,83 @@ void SeasonManager::GeneratePlayoffBracket() {
     std::cout << "[SeasonManager] Generated playoff bracket with " << playoffBracket.size() << " initial series\n";
 }
 
-bool SeasonManager::SimulatePlayoffGame(const std::string& seriesId, int speedMultiplier) {
-    for (auto& series : playoffBracket) {
-        if (series.seriesId == seriesId) {
-            if (series.complete || !series.team1 || !series.team2) return false;
+bool SeasonManager::NextPlayoffGameTeams(const std::string& seriesId, std::shared_ptr<Team>* home, std::shared_ptr<Team>* away) const {
+    for (const auto& series : playoffBracket) {
+        if (series.seriesId != seriesId) continue;
+        if (series.complete || !series.team1 || !series.team2) return false;
 
-            if (matchEngine) {
-                matchEngine->SetSpeedMultiplier(speedMultiplier >= 6 ? 0 : speedMultiplier);
-            }
-
-            int gameNum = series.team1Wins + series.team2Wins;
-            bool team1Home = true;
-            if (series.targetWins == 4) {
-                // NBA 2-2-1-1-1 format: Games 1,2,5,7 at team1, 3,4,6 at team2
-                team1Home = (gameNum == 0 || gameNum == 1 || gameNum == 4 || gameNum == 6);
-            }
-
-            Game game;
-            game.homeTeam = team1Home ? series.team1 : series.team2;
-            game.awayTeam = team1Home ? series.team2 : series.team1;
-
-            matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
-            matchEngine->SimulateFullMatch();
-
-            auto state = matchEngine->GetMatchState();
-            game.homeScore = state->homeScore;
-            game.awayScore = state->awayScore;
-            game.played = true;
-
-            series.games.push_back(game);
-
-            if (game.homeScore > game.awayScore) {
-                if (team1Home) series.team1Wins++;
-                else series.team2Wins++;
-            } else {
-                if (team1Home) series.team2Wins++;
-                else series.team1Wins++;
-            }
-
-            if (series.team1Wins >= series.targetWins) {
-                series.complete = true;
-                series.winner = series.team1;
-            } else if (series.team2Wins >= series.targetWins) {
-                series.complete = true;
-                series.winner = series.team2;
-            }
-
-            // Check if all series in this round are complete; if so, setup next round
-            bool allRoundComplete = true;
-            for (const auto& s : playoffBracket) {
-                if (s.roundIndex == currentPlayoffRound && !s.complete) {
-                    allRoundComplete = false;
-                    break;
-                }
-            }
-            if (allRoundComplete) {
-                SetupNextPlayoffRound();
-            }
-
-            return true;
+        const int gameNum = series.team1Wins + series.team2Wins;
+        bool team1Home = true;
+        if (series.targetWins == 4) {
+            // NBA 2-2-1-1-1 format: Games 1,2,5,7 at team1, 3,4,6 at team2
+            team1Home = (gameNum == 0 || gameNum == 1 || gameNum == 4 || gameNum == 6);
         }
+        if (home) *home = team1Home ? series.team1 : series.team2;
+        if (away) *away = team1Home ? series.team2 : series.team1;
+        return true;
     }
     return false;
+}
+
+bool SeasonManager::RecordPlayoffGame(const std::string& seriesId, int homeScore, int awayScore) {
+    std::shared_ptr<Team> home;
+    std::shared_ptr<Team> away;
+    if (!NextPlayoffGameTeams(seriesId, &home, &away)) return false;
+
+    for (auto& series : playoffBracket) {
+        if (series.seriesId != seriesId) continue;
+
+        Game game;
+        game.homeTeam = home;
+        game.awayTeam = away;
+        game.homeScore = homeScore;
+        game.awayScore = awayScore;
+        game.played = true;
+        series.games.push_back(game);
+
+        const bool homeWon = homeScore > awayScore;
+        const bool team1IsHome = (home == series.team1);
+        if (homeWon == team1IsHome) series.team1Wins++;
+        else series.team2Wins++;
+
+        if (series.team1Wins >= series.targetWins) {
+            series.complete = true;
+            series.winner = series.team1;
+        } else if (series.team2Wins >= series.targetWins) {
+            series.complete = true;
+            series.winner = series.team2;
+        }
+
+        // When every series of this round is complete, the next round (or the champion) is set up
+        bool allRoundComplete = true;
+        for (const auto& s : playoffBracket) {
+            if (s.roundIndex == currentPlayoffRound && !s.complete) {
+                allRoundComplete = false;
+                break;
+            }
+        }
+        if (allRoundComplete) {
+            CoutSilencer silence(quiet);
+            SetupNextPlayoffRound();
+        }
+        return true;
+    }
+    return false;
+}
+
+bool SeasonManager::SimulatePlayoffGame(const std::string& seriesId, int speedMultiplier) {
+    std::shared_ptr<Team> home;
+    std::shared_ptr<Team> away;
+    if (!NextPlayoffGameTeams(seriesId, &home, &away)) return false;
+
+    Game game;
+    game.homeTeam = home;
+    game.awayTeam = away;
+    if (matchEngine) {
+        matchEngine->SetSpeedMultiplier(speedMultiplier >= 6 ? 0 : speedMultiplier);
+    }
+    SimulateGameInPlace(game);
+    return RecordPlayoffGame(seriesId, game.homeScore, game.awayScore);
 }
 
 bool SeasonManager::AdvancePlayoffRound(int speedMultiplier) {
@@ -743,18 +943,23 @@ void SeasonManager::SetupNextPlayoffRound() {
                     return (s->winner == s->team1) ? s->team2 : s->team1;
                 };
 
+                // Read everything before push_back: growing the vector invalidates these pointers
+                const auto eLoser = getLoser(e7v8);
+                const auto eWinner = e9v10->winner;
+                const auto wLoser = getLoser(w7v8);
+                const auto wWinner = w9v10->winner;
+
                 PlayoffSeries eFinal;
                 eFinal.seriesId = "Eastern_PI_Final";
                 eFinal.roundName = "Play-In (8th Seed Decider)";
                 eFinal.conference = "Eastern";
                 eFinal.roundIndex = 0;
                 eFinal.seriesIndex = 2;
-                eFinal.team1 = getLoser(e7v8);
-                eFinal.team2 = e9v10->winner;
+                eFinal.team1 = eLoser;
+                eFinal.team2 = eWinner;
                 eFinal.team1Seed = 8;
                 eFinal.team2Seed = 9;
                 eFinal.targetWins = 1;
-                playoffBracket.push_back(eFinal);
 
                 PlayoffSeries wFinal;
                 wFinal.seriesId = "Western_PI_Final";
@@ -762,11 +967,13 @@ void SeasonManager::SetupNextPlayoffRound() {
                 wFinal.conference = "Western";
                 wFinal.roundIndex = 0;
                 wFinal.seriesIndex = 2;
-                wFinal.team1 = getLoser(w7v8);
-                wFinal.team2 = w9v10->winner;
+                wFinal.team1 = wLoser;
+                wFinal.team2 = wWinner;
                 wFinal.team1Seed = 8;
                 wFinal.team2Seed = 9;
                 wFinal.targetWins = 1;
+
+                playoffBracket.push_back(eFinal);
                 playoffBracket.push_back(wFinal);
                 return;
             }

@@ -76,6 +76,11 @@ struct Player {
     int turnoversThisGame;
     int foulsThisGame;
     float morale = 0.0f;    // -1 (furious) .. +1 (fired up); moved by team talks, fades over time
+
+    // Career: contract and age (maintained by CareerManager)
+    int salary = 0;             // dollars per season
+    int contractEndYear = 0;    // last season (start year) the contract covers
+    int age = 0;
 };
 
 // Team structure
