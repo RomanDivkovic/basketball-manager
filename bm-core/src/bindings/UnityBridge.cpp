@@ -29,7 +29,23 @@ std::string playoffsJson;
 std::string championJson;
 std::string teamRosterJson;
 std::string commentary;
+std::string talkJson;
+std::string coachError;
+std::string playbookJson;
+std::string feedbackJson;
 
+const char* BreakName(bm::engine::BreakType type) {
+    using bm::engine::BreakType;
+    switch (type) {
+        case BreakType::PreMatch: return "prematch";
+        case BreakType::QuarterBreak: return "quarter";
+        case BreakType::Halftime: return "halftime";
+        case BreakType::Overtime: return "overtime";
+        case BreakType::Timeout: return "timeout";
+        case BreakType::ShortTimeout: return "shorttimeout";
+        default: return "none";
+    }
+}
 std::string EscapeJson(const std::string& input) {
     std::ostringstream ss;
     for (char c : input) {
@@ -160,6 +176,7 @@ void SerializePlayers(std::ostringstream& json, const std::vector<std::shared_pt
              << ",\"fls\":" << p->foulsThisGame
              << ",\"stamina\":" << stamina
              << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
+             << ",\"instr\":" << (matchEngine ? static_cast<int>(matchEngine->GetInstruction(p->playerId)) : 0)
              << "}";
     }
     json << "]";
@@ -196,6 +213,17 @@ void UpdateStateJson() {
          << ",\"isGameOver\":" << (state.matchComplete ? "true" : "false")
          << ",\"commentary\":\"" << EscapeJson(state.lastPlay)
          << "\",\"periodBreak\":" << (matchEngine->IsPeriodBreak() ? "true" : "false")
+         << ",\"breakType\":\"" << BreakName(matchEngine->GetBreakType()) << "\""
+         << ",\"breakHome\":" << (matchEngine->IsBreakHomeTeam() ? "true" : "false")
+         << ",\"talkGiven\":" << (matchEngine->IsTalkGiven() ? "true" : "false")
+         << ",\"pendingTimeoutHome\":" << matchEngine->GetPendingTimeout(true)
+         << ",\"pendingTimeoutAway\":" << matchEngine->GetPendingTimeout(false)
+         << ",\"canTimeoutHome\":" << (matchEngine->CanCallTimeout(true) ? "true" : "false")
+         << ",\"homeOffenseScheme\":" << static_cast<int>(matchEngine->GetTacticalManager()->GetHomeOffensiveStrategy())
+         << ",\"homeOffenseTarget\":\"" << EscapeJson(matchEngine->GetOffenseTarget(true)) << "\""
+         << ",\"homeOffensePlay\":\"" << EscapeJson(matchEngine->GetOffensePlay(true)) << "\""
+         << ",\"homeDefenseScheme\":" << static_cast<int>(matchEngine->GetTacticalManager()->GetHomeDefensiveStrategy())
+         << ",\"pendingSubs\":" << matchEngine->GetPendingSubstitutions()
          << ",\"feedTotal\":" << matchEngine->GetFeedTotal()
          << ",\"feed\":[";
     {
@@ -260,7 +288,49 @@ void InitializeMatch(const char* homeTeamId, const char* awayTeamId) {
     matchEngine = std::make_unique<bm::engine::MatchEngine>();
     matchEngine->SetHeadless(true);
     matchEngine->InitializeMatch(homeTeam, awayTeam);
+    matchEngine->SetBreaksEnabled(true);
     UpdateStateJson();
+}
+
+int RequestTimeout(int isHomeTeam, int full) {
+    if (!matchEngine) return 0;
+    const int ok = matchEngine->RequestTimeout(isHomeTeam != 0, full != 0) ? 1 : 0;
+    UpdateStateJson();
+    return ok;
+}
+
+void EndMatchBreak() {
+    if (!matchEngine) return;
+    matchEngine->EndBreak();
+    UpdateStateJson();
+}
+
+int ApplyTeamTalk(int isHomeTeam, int talkType, int coachMotivation) {
+    if (!matchEngine || talkType < 0 || talkType > 6) return 0;
+    const int ok = matchEngine->ApplyTeamTalk(isHomeTeam != 0, static_cast<bm::engine::TeamTalkType>(talkType),
+                                              coachMotivation) ? 1 : 0;
+    UpdateStateJson();
+    return ok;
+}
+
+const char* GetTeamTalkJson() {
+    std::ostringstream json;
+    if (!matchEngine || !matchEngine->GetLastTeamTalk().valid) {
+        talkJson = "{\"valid\":false,\"summary\":\"\",\"reactions\":[]}";
+        return talkJson.c_str();
+    }
+    const auto& talk = matchEngine->GetLastTeamTalk();
+    json << "{\"valid\":true,\"type\":" << static_cast<int>(talk.type)
+         << ",\"summary\":\"" << EscapeJson(talk.summary) << "\",\"reactions\":[";
+    for (size_t i = 0; i < talk.reactions.size(); ++i) {
+        const auto& r = talk.reactions[i];
+        if (i > 0) json << ",";
+        json << "{\"id\":\"" << EscapeJson(r.playerId) << "\",\"name\":\"" << EscapeJson(r.name)
+             << "\",\"mood\":" << r.mood << ",\"delta\":" << std::fixed << std::setprecision(2) << r.delta << "}";
+    }
+    json << "]}";
+    talkJson = json.str();
+    return talkJson.c_str();
 }
 
 int StepMatchSeconds(int seconds) {
@@ -707,7 +777,7 @@ void SetTeamTactics(int isHomeTeam, int offensiveStrategy, int defensiveStrategy
     auto tm = matchEngine->GetTacticalManager();
     if (!tm) return;
 
-    auto off = static_cast<bm::engine::OffensiveStrategy>(std::clamp(offensiveStrategy, 0, 5));
+    auto off = static_cast<bm::engine::OffensiveStrategy>(std::clamp(offensiveStrategy, 0, 8));
     auto def = static_cast<bm::engine::DefensiveStrategy>(std::clamp(defensiveStrategy, 0, 5));
 
     if (isHomeTeam != 0) {
@@ -721,28 +791,72 @@ void SetTeamTactics(int isHomeTeam, int offensiveStrategy, int defensiveStrategy
 
 int SwapMatchPlayers(int isHomeTeam, const char* playerOutId, const char* playerInId) {
     if (!matchEngine || !playerOutId || !playerInId) return 0;
+
+    // Queued until the next dead ball (immediate during breaks)
+    const bool ok = matchEngine->RequestSubstitution(isHomeTeam != 0, playerOutId, playerInId);
+    UpdateStateJson();
+    return ok ? 1 : 0;
+}
+
+int SetOffenseScheme(int isHomeTeam, int scheme, const char* targetPlayerId, const char* playId) {
+    if (!matchEngine || scheme < 0 || scheme > 8) return 0;
+    std::string error;
+    const bool ok = matchEngine->SetOffenseScheme(isHomeTeam != 0, static_cast<bm::engine::OffensiveStrategy>(scheme),
+                                                  targetPlayerId ? targetPlayerId : "", playId ? playId : "", &error);
+    coachError = ok ? std::string() : error;
+    UpdateStateJson();
+    return ok ? 1 : 0;
+}
+
+const char* GetCoachError() {
+    return coachError.c_str();
+}
+
+int SetDefenseScheme(int isHomeTeam, int scheme) {
+    if (!matchEngine || scheme < 0 || scheme > 5) return 0;
     auto tm = matchEngine->GetTacticalManager();
-    if (!tm) return 0;
+    const auto def = static_cast<bm::engine::DefensiveStrategy>(scheme);
+    if (isHomeTeam != 0) tm->SetHomeDefensiveStrategy(def);
+    else tm->SetAwayDefensiveStrategy(def);
+    UpdateStateJson();
+    return 1;
+}
 
-    auto targetTeam = (isHomeTeam != 0) ? homeTeam : awayTeam;
-    if (!targetTeam) return 0;
-
-    std::shared_ptr<bm::Player> pOut = nullptr;
-    std::shared_ptr<bm::Player> pIn = nullptr;
-
-    for (auto& p : targetTeam->roster) {
-        if (p->playerId == playerOutId) pOut = p;
-        if (p->playerId == playerInId) pIn = p;
+const char* GetPlaybookJson() {
+    std::ostringstream json;
+    json << "{\"plays\":[";
+    bool first = true;
+    for (const auto& play : bm::engine::MatchEngine::GetPlaybook()) {
+        if (!first) json << ",";
+        first = false;
+        json << "{\"id\":\"" << EscapeJson(play.id) << "\",\"name\":\"" << EscapeJson(play.name)
+             << "\",\"scheme\":" << static_cast<int>(play.scheme) << "}";
     }
+    json << "]}";
+    playbookJson = json.str();
+    return playbookJson.c_str();
+}
 
-    if (!pOut || !pIn) return 0;
+int GiveFeedback(int isHomeTeam, const char* playerId, int instruction, int coachMotivation) {
+    if (!matchEngine || !playerId || instruction < 1 || instruction > 3) return 0;
+    const bool ok = matchEngine->GiveFeedback(isHomeTeam != 0, playerId,
+                                              static_cast<bm::engine::PlayerInstruction>(instruction), coachMotivation);
+    UpdateStateJson();
+    return ok ? 1 : 0;
+}
 
-    bool success = tm->ManualSubstitution(targetTeam, pOut, pIn, 0);
-    if (success) {
-        UpdateStateJson();
-        return 1;
+const char* GetFeedbackJson() {
+    std::ostringstream json;
+    if (!matchEngine || !matchEngine->GetLastFeedback().valid) {
+        feedbackJson = "{\"valid\":false}";
+        return feedbackJson.c_str();
     }
-    return 0;
+    const auto& fb = matchEngine->GetLastFeedback();
+    json << "{\"valid\":true,\"id\":\"" << EscapeJson(fb.playerId) << "\",\"name\":\"" << EscapeJson(fb.name)
+         << "\",\"instruction\":" << static_cast<int>(fb.instruction) << ",\"mood\":" << fb.mood
+         << ",\"text\":\"" << EscapeJson(fb.text) << "\"}";
+    feedbackJson = json.str();
+    return feedbackJson.c_str();
 }
 
 const char* GetEngineVersion() {

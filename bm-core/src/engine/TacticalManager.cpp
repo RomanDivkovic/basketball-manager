@@ -187,6 +187,12 @@ float TacticalManager::GetThreePointPercentage(OffensiveStrategy strategy) const
             return 0.40f;  // 40% of attempts are 3PT
         case OffensiveStrategy::FAST_BREAK:
             return 0.45f;  // 45% of attempts are 3PT
+        case OffensiveStrategy::PICK_AND_ROLL:
+            return 0.33f;
+        case OffensiveStrategy::BALL_MOVEMENT:
+            return 0.38f;
+        case OffensiveStrategy::PLAY_THROUGH_PLAYER:
+            return 0.35f;
         default:
             return 0.33f;
     }

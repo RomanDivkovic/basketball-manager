@@ -225,6 +225,246 @@ void TestFlowVariety() {
     g_testsPassed++;
 }
 
+void TestBreaksTimeoutsAndTalks() {
+    std::cout << "[TEST] Pre-match/period breaks, NBA timeouts and team talks...\n";
+    using bm::engine::BreakType;
+    using bm::engine::TeamTalkType;
+
+    auto homeTeam = CreateMockTeam("1", "Boston Celtics");
+    auto awayTeam = CreateMockTeam("2", "New York Knicks");
+    bm::engine::MatchEngine engine;
+    engine.SetHeadless(true);
+    engine.InitializeMatch(homeTeam, awayTeam);
+    engine.SetBreaksEnabled(true);
+    auto state = engine.GetMatchState();
+
+    // The match opens with a pre-match break and does not move until the coach continues
+    TEST_ASSERT(engine.GetBreakType() == BreakType::PreMatch, "Match must open with the pre-match break");
+    TEST_ASSERT(!engine.StepSecond(), "Nothing may be played during a break");
+    TEST_ASSERT(state->timeRemaining == 720, "Clock must not move during the pre-match break");
+    TEST_ASSERT(engine.GetTimeoutsRemaining(true) == 7 && engine.GetTimeoutsRemaining(false) == 7,
+                "NBA gives each team seven timeouts");
+
+    // One talk per break; every active player reacts and morale stays in range
+    TEST_ASSERT(engine.ApplyTeamTalk(true, TeamTalkType::Encourage, 85), "A pre-match talk must be accepted");
+    TEST_ASSERT(!engine.ApplyTeamTalk(true, TeamTalkType::Encourage, 85), "Only one talk per break");
+    TEST_ASSERT(engine.GetLastTeamTalk().reactions.size() == homeTeam->roster.size(), "Every player must react");
+    for (const auto& p : homeTeam->roster) {
+        TEST_ASSERT(p->morale >= -1.0f && p->morale <= 1.0f, "Morale must stay within -1..1");
+    }
+    engine.EndBreak();
+
+    // A full timeout requested mid-play is granted at the next dead ball
+    engine.StepSeconds(30);
+    TEST_ASSERT(engine.RequestTimeout(true, true), "Home may request a full timeout");
+    TEST_ASSERT(!engine.RequestTimeout(true, false), "A second request while one is queued is refused");
+    int guard = 0;
+    while (!engine.IsBreakActive() && guard++ < 200) engine.StepSecond();
+    TEST_ASSERT(engine.GetBreakType() == BreakType::Timeout, "The timeout must start a break");
+    TEST_ASSERT(engine.GetTimeoutsRemaining(true) == 6, "A timeout costs one of the seven");
+    engine.EndBreak();
+
+    // A short huddle only allows a quick instruction
+    TEST_ASSERT(engine.RequestTimeout(true, false), "Home may request a short timeout");
+    guard = 0;
+    while (!engine.IsBreakActive() && guard++ < 200) engine.StepSecond();
+    TEST_ASSERT(engine.GetBreakType() == BreakType::ShortTimeout, "The short timeout must start a break");
+    TEST_ASSERT(!engine.ApplyTeamTalk(true, TeamTalkType::BeAngry, 85), "No long speeches in 20 seconds");
+    TEST_ASSERT(engine.ApplyTeamTalk(true, TeamTalkType::MoreDefense, 85), "A quick instruction is allowed");
+    engine.EndBreak();
+
+    // Fourth period: at most four timeouts per team
+    state->quarterNumber = 4;
+    state->timeRemaining = 600;
+    int granted = 0;
+    for (int i = 0; i < 6; ++i) {
+        if (!engine.RequestTimeout(true, false)) break;
+        guard = 0;
+        while (!engine.IsBreakActive() && guard++ < 200) engine.StepSecond();
+        engine.EndBreak();
+        ++granted;
+        state->timeRemaining = 600;
+    }
+    TEST_ASSERT(granted <= 4, "No more than four timeouts in the fourth period");
+    TEST_ASSERT(granted >= 3, "Timeouts in the fourth period must still be possible");
+
+    // Whole game: breaks appear after Q1, at halftime and after Q3; the game still finishes
+    auto home2 = CreateMockTeam("1", "Boston Celtics");
+    auto away2 = CreateMockTeam("2", "Miami Heat");
+    bm::engine::MatchEngine full;
+    full.SetHeadless(true);
+    full.InitializeMatch(home2, away2);
+    full.SetBreaksEnabled(true);
+    int quarterBreaks = 0, halftimes = 0, prematch = 0;
+    int steps = 0;
+    while (steps++ < 100000) {
+        if (full.IsBreakActive()) {
+            if (full.GetBreakType() == BreakType::QuarterBreak) quarterBreaks++;
+            if (full.GetBreakType() == BreakType::Halftime) halftimes++;
+            if (full.GetBreakType() == BreakType::PreMatch) prematch++;
+            full.EndBreak();
+            continue;
+        }
+        if (!full.StepSecond() && !full.IsBreakActive()) break;
+    }
+    TEST_ASSERT(full.GetMatchState()->matchComplete, "The match must finish with breaks enabled");
+    TEST_ASSERT(prematch == 1 && halftimes == 1 && quarterBreaks >= 2, "Break after Q1, halftime and after Q3");
+
+    std::cout << "  -> quarter breaks " << quarterBreaks << ", halftime " << halftimes << ", granted Q4 timeouts " << granted << "\n";
+    g_testsPassed++;
+}
+
+void TestTeamTalkFitsTheSituation() {
+    std::cout << "[TEST] Team talk reactions follow the situation...\n";
+    using bm::engine::TeamTalkType;
+
+    auto positives = [](TeamTalkType type, int margin) {
+        int total = 0;
+        for (int trial = 0; trial < 40; ++trial) {
+            auto homeTeam = CreateMockTeam("1", "Boston Celtics");
+            auto awayTeam = CreateMockTeam("2", "Miami Heat");
+            bm::engine::MatchEngine engine;
+            engine.SetHeadless(true);
+            engine.InitializeMatch(homeTeam, awayTeam);
+            engine.SetBreaksEnabled(true);
+            engine.EndBreak();
+            engine.StepSeconds(2);
+            engine.GetMatchState()->homeScore = 40 + margin;
+            engine.GetMatchState()->awayScore = 40;
+            engine.GetMatchState()->timeRemaining = 0;
+            engine.GetMatchState()->quarterNumber = 2;
+            while (!engine.IsBreakActive() && engine.StepSecond()) {}
+            if (!engine.ApplyTeamTalk(true, type, 80)) return -1;
+            for (const auto& r : engine.GetLastTeamTalk().reactions) total += r.mood;
+        }
+        return total;
+    };
+
+    const int praiseWhenWinning = positives(TeamTalkType::Praise, 12);
+    const int praiseWhenLosing = positives(TeamTalkType::Praise, -12);
+    const int angryWhenWinning = positives(TeamTalkType::BeAngry, 12);
+    const int encourageWhenLosing = positives(TeamTalkType::Encourage, -12);
+    TEST_ASSERT(praiseWhenWinning >= 0 && praiseWhenLosing >= -10000, "Talks must be accepted at halftime");
+    TEST_ASSERT(praiseWhenWinning > praiseWhenLosing, "Praise lands better when winning than when losing");
+    TEST_ASSERT(encourageWhenLosing > angryWhenWinning, "Encouragement beats anger when the team is ahead or behind");
+    std::cout << "  -> mood sums: praise ahead " << praiseWhenWinning << ", praise behind " << praiseWhenLosing
+              << ", angry ahead " << angryWhenWinning << ", encourage behind " << encourageWhenLosing << "\n";
+    g_testsPassed++;
+}
+
+void TestOffenseSchemesPlaybookAndFeedback() {
+    std::cout << "[TEST] Offense schemes, playbook, individual feedback and queued substitutions...\n";
+    using bm::engine::OffensiveStrategy;
+    using bm::engine::PlayerInstruction;
+
+    // Playbook covers every user-facing scheme and each play names its scheme
+    const auto& book = bm::engine::MatchEngine::GetPlaybook();
+    for (auto scheme : {OffensiveStrategy::THREE_POINT_HEAVY, OffensiveStrategy::INSIDE_FOCUSED, OffensiveStrategy::PICK_AND_ROLL,
+                        OffensiveStrategy::BALL_MOVEMENT, OffensiveStrategy::PLAY_THROUGH_PLAYER}) {
+        int plays = 0;
+        for (const auto& p : book) if (p.scheme == scheme) plays++;
+        TEST_ASSERT(plays >= 2, "Every scheme needs at least two plays in the playbook");
+    }
+
+    auto homeTeam = CreateMockTeam("1", "Boston Celtics");
+    auto awayTeam = CreateMockTeam("2", "Miami Heat");
+    bm::engine::MatchEngine engine;
+    engine.SetHeadless(true);
+    engine.InitializeMatch(homeTeam, awayTeam);
+    const std::string hub = homeTeam->roster[2]->playerId;
+    const std::string benchId = homeTeam->roster[5]->playerId;   // a reserve
+    std::string error;
+
+    // Contextual rules
+    TEST_ASSERT(!engine.SetOffenseScheme(true, OffensiveStrategy::PLAY_THROUGH_PLAYER, "", "", &error) && !error.empty(),
+                "Play through a player needs a target player");
+    TEST_ASSERT(!engine.SetOffenseScheme(true, OffensiveStrategy::PLAY_THROUGH_PLAYER, benchId, "", &error),
+                "The target player must be on the floor");
+    TEST_ASSERT(!engine.SetOffenseScheme(true, OffensiveStrategy::PICK_AND_ROLL, "", "elbow_hub", &error),
+                "A play must belong to the chosen scheme");
+    TEST_ASSERT(!engine.SetOffenseScheme(true, OffensiveStrategy::PICK_AND_ROLL, "", "no_such_play", &error),
+                "Unknown plays are rejected");
+    TEST_ASSERT(engine.SetOffenseScheme(true, OffensiveStrategy::PICK_AND_ROLL, "", "spain_pick_and_roll", &error),
+                "A matching play is accepted");
+    TEST_ASSERT(engine.SetOffenseScheme(true, OffensiveStrategy::PLAY_THROUGH_PLAYER, hub, "elbow_hub", &error),
+                "Hub player and matching play are accepted");
+    TEST_ASSERT(engine.GetOffenseTarget(true) == hub && engine.GetOffensePlay(true) == "elbow_hub", "Plan must be stored");
+
+    // Substitutions are queued while the ball is live and applied at the next dead ball
+    engine.StepSeconds(5);
+    const std::string outId = homeTeam->roster[4]->playerId;
+    TEST_ASSERT(!engine.RequestSubstitution(true, benchId, benchId), "A player cannot replace himself");
+    TEST_ASSERT(!engine.RequestSubstitution(true, benchId, outId), "The outgoing player must be on the floor");
+    TEST_ASSERT(!engine.RequestSubstitution(true, outId, homeTeam->roster[0]->playerId), "The incoming player must be on the bench");
+    TEST_ASSERT(engine.RequestSubstitution(true, outId, benchId), "A valid substitution is accepted");
+    int guard = 0;
+    while (engine.GetPendingSubstitutions() > 0 && guard++ < 200) engine.StepSecond();
+    TEST_ASSERT(engine.GetPendingSubstitutions() == 0, "Queued substitutions must be applied at a dead ball");
+    TEST_ASSERT(homeTeam->roster[5]->onCourt && !homeTeam->roster[4]->onCourt, "The substitution must change the lineup");
+
+    // The hub player leaving ends the plan
+    TEST_ASSERT(engine.RequestSubstitution(true, hub, outId), "The hub player can be substituted");
+    guard = 0;
+    while (engine.GetPendingSubstitutions() > 0 && guard++ < 200) engine.StepSecond();
+    TEST_ASSERT(engine.GetTacticalManager()->GetHomeOffensiveStrategy() == OffensiveStrategy::BALL_MOVEMENT,
+                "Without the hub player the team moves the ball instead");
+    TEST_ASSERT(engine.GetOffenseTarget(true).empty(), "The hub target must be cleared");
+
+    // Individual feedback only goes to players on the floor and wears off
+    const std::string onFloor = homeTeam->roster[1]->playerId;
+    TEST_ASSERT(!homeTeam->roster[2]->onCourt, "The hub player must be on the bench by now");
+    TEST_ASSERT(!engine.GiveFeedback(true, hub, PlayerInstruction::SettleDown, 85), "Benched players cannot receive feedback");
+    TEST_ASSERT(engine.GiveFeedback(true, onFloor, PlayerInstruction::LookForYourShot, 85), "Feedback to a player on the floor");
+    TEST_ASSERT(engine.GetInstruction(onFloor) == PlayerInstruction::LookForYourShot, "The instruction must be stored");
+    TEST_ASSERT(engine.GetLastFeedback().valid && engine.GetLastFeedback().playerId == onFloor, "Reaction must be reported");
+    for (int i = 0; i < 30; ++i) engine.SimulatePossession();
+    TEST_ASSERT(engine.GetInstruction(onFloor) == PlayerInstruction::None, "Instructions wear off after some possessions");
+
+    // Effects: playing through a player and telling a player to shoot raise his scoring
+    auto avgPoints = [](bool throughHub, bool lookForShot) {
+        double total = 0;
+        for (int game = 0; game < 40; ++game) {
+            auto h = CreateMockTeam("1", "Boston Celtics");
+            auto a = CreateMockTeam("2", "Miami Heat");
+            bm::engine::MatchEngine e;
+            e.SetHeadless(true);
+            e.InitializeMatch(h, a);
+            const std::string target = h->roster[2]->playerId;
+            if (throughHub) e.SetOffenseScheme(true, OffensiveStrategy::PLAY_THROUGH_PLAYER, target, "iso_star");
+            for (int p = 0; p < 90; ++p) {
+                if (lookForShot && p % 10 == 0) e.GiveFeedback(true, target, PlayerInstruction::LookForYourShot, 99);
+                e.SimulatePossession();
+            }
+            total += h->roster[2]->pointsThisGame;
+        }
+        return total / 40.0;
+    };
+    const double base = avgPoints(false, false);
+    const double throughHub = avgPoints(true, false);
+    const double shoot = avgPoints(false, true);
+    TEST_ASSERT(throughHub > base * 1.15, "Playing through a player must raise his scoring");
+    TEST_ASSERT(shoot > base * 1.02, "'Look for your shot' must raise his scoring");
+
+    // Pick and roll shows up as screens in the play-by-play
+    int screens = 0;
+    for (int game = 0; game < 3; ++game) {
+        auto h = CreateMockTeam("1", "Boston Celtics");
+        auto a = CreateMockTeam("2", "Miami Heat");
+        bm::engine::MatchEngine e;
+        e.SetHeadless(true);
+        e.InitializeMatch(h, a);
+        e.SetOffenseScheme(true, OffensiveStrategy::PICK_AND_ROLL, "", "high_pick_and_roll");
+        e.SetOffenseScheme(false, OffensiveStrategy::PICK_AND_ROLL, "", "spain_pick_and_roll");
+        e.StepSeconds(60000);
+        for (const auto& line : e.GetFeed()) if (line.find("screen") != std::string::npos) screens++;
+    }
+    TEST_ASSERT(screens > 0, "Pick and roll must use screens");
+
+    std::cout << "  -> avg points of the featured player: base " << base << ", through hub " << throughHub
+              << ", look for shot " << shoot << ", screens seen " << screens << "\n";
+    g_testsPassed++;
+}
+
 void TestBridgeSeasonAndPlayoffs() {
     std::cout << "[TEST] UnityBridge Season & Playoff Bracket Integration...\n";
     LoadDatabase("/tmp/basketball_manager_readable.db");
@@ -276,6 +516,9 @@ int main() {
     TestOvertimeTriggerWhenTied();
     TestSecondByStepFlow();
     TestFlowVariety();
+    TestBreaksTimeoutsAndTalks();
+    TestTeamTalkFitsTheSituation();
+    TestOffenseSchemesPlaybookAndFeedback();
     TestBridgeSeasonAndPlayoffs();
 
     std::cout << "\n----------------------------------------\n";

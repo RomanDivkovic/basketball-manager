@@ -111,6 +111,69 @@ struct PossessionBeat {
     std::function<void()> onComplete;    // score and stat changes
 };
 
+// Why play is stopped while the UI waits for the coach
+enum class BreakType {
+    None,
+    PreMatch,
+    QuarterBreak,
+    Halftime,
+    Overtime,       // regulation ended level
+    Timeout,        // full timeout, 75 s, team talk and substitutions
+    ShortTimeout    // 20 s huddle, quick instruction and substitutions
+};
+
+enum class TeamTalkType {
+    Encourage = 0,
+    Praise = 1,
+    BeAngry = 2,
+    MoreDefense = 3,
+    MoreOffense = 4,
+    StayCalm = 5,
+    SayNothing = 6
+};
+
+struct TalkReaction {
+    std::string playerId;
+    std::string name;
+    int mood = 0;          // -1 reacts badly, 0 unmoved, +1 reacts well
+    float delta = 0.0f;    // morale change
+};
+
+struct TeamTalkResult {
+    bool valid = false;
+    bool isHome = true;
+    TeamTalkType type = TeamTalkType::SayNothing;
+    std::string summary;
+    std::vector<TalkReaction> reactions;
+};
+
+// Individual feedback to one player on the floor
+enum class PlayerInstruction {
+    None = 0,
+    SettleDown = 1,        // fewer turnovers, calmer shot selection
+    FocusOnDefense = 2,    // better defense, fewer shots
+    LookForYourShot = 3    // more shots, a little less selective
+};
+
+struct PlayerFeedbackResult {
+    bool valid = false;
+    std::string playerId;
+    std::string name;
+    PlayerInstruction instruction = PlayerInstruction::None;
+    int mood = 0;              // -1 takes it badly, 0 unmoved, +1 responds well
+    std::string text;
+};
+
+// A named set play the coach can call; the biases change shot selection and quality
+struct Play {
+    std::string id;
+    std::string name;
+    OffensiveStrategy scheme;
+    float threeBias;      // change of the three-point share
+    float efficiency;     // change of shot quality
+    float turnover;       // change of the turnover chance
+};
+
 /**
  * MatchEngine - Core basketball match simulation (48-minute games)
  * Handles possession, plays, scoring, substitutions, fouls, stamina
@@ -151,6 +214,46 @@ public:
     // Play-by-play feed, newest last. feedTotal counts every line ever emitted.
     const std::deque<std::string>& GetFeed() const { return feedHistory; }
     int GetFeedTotal() const { return feedTotal; }
+
+    // ----- Breaks, NBA timeouts and team talks (live UI path) -----
+    // With breaks enabled the match opens with a pre-match break, stops between periods and
+    // whenever a timeout is granted; StepSecond() returns false until EndBreak() is called.
+    void SetBreaksEnabled(bool enabled);
+    bool AreBreaksEnabled() const { return breaksEnabled; }
+    BreakType GetBreakType() const { return currentBreak; }
+    bool IsBreakActive() const { return currentBreak != BreakType::None; }
+    bool IsBreakHomeTeam() const { return breakHome; }
+    bool IsTalkGiven() const { return breakTalkGiven; }
+    void EndBreak();
+
+    // NBA: 7 timeouts per game, at most 4 in the fourth period (2 after 3:00), 2 per overtime.
+    // A request is granted at the next dead ball. full = 75 s with a team talk, otherwise 20 s.
+    bool CanCallTimeout(bool isHomeTeam) const;
+    bool RequestTimeout(bool isHomeTeam, bool full);
+    int GetPendingTimeout(bool isHomeTeam) const { return isHomeTeam ? pendingTimeoutHome : pendingTimeoutAway; }
+
+    // One talk per break; the reaction of every player is returned by GetLastTeamTalk()
+    bool ApplyTeamTalk(bool isHomeTeam, TeamTalkType type, int coachMotivation);
+    const TeamTalkResult& GetLastTeamTalk() const { return lastTalk; }
+
+    // ----- Offense schemes, playbook, individual feedback and substitutions -----
+    static const std::vector<Play>& GetPlaybook();
+
+    // Scheme with an optional target player (required for PLAY_THROUGH_PLAYER) and an optional
+    // play from the playbook, which has to belong to the scheme. Returns false and sets `error`.
+    bool SetOffenseScheme(bool isHomeTeam, OffensiveStrategy scheme, const std::string& targetPlayerId,
+                          const std::string& playId, std::string* error = nullptr);
+    const std::string& GetOffenseTarget(bool isHomeTeam) const { return offenseTarget[isHomeTeam ? 0 : 1]; }
+    const std::string& GetOffensePlay(bool isHomeTeam) const { return offensePlay[isHomeTeam ? 0 : 1]; }
+
+    // Feedback to a player on the floor; his temperament decides how well it lands (and how long it lasts)
+    bool GiveFeedback(bool isHomeTeam, const std::string& playerId, PlayerInstruction instruction, int coachMotivation);
+    PlayerInstruction GetInstruction(const std::string& playerId) const;
+    const PlayerFeedbackResult& GetLastFeedback() const { return lastFeedback; }
+
+    // Substitutions happen at the next dead ball (immediately during a break)
+    bool RequestSubstitution(bool isHomeTeam, const std::string& outPlayerId, const std::string& inPlayerId);
+    int GetPendingSubstitutions() const { return static_cast<int>(pendingSubs.size()); }
 
     // Simulate full quarter (12 minutes = 720 seconds) with interactive pause
     void SimulateQuarter(int quarterNumber);
@@ -222,6 +325,40 @@ private:
     std::deque<std::string> feedHistory;
     int feedTotal = 0;
 
+    // Breaks, timeouts and talks
+    bool breaksEnabled = false;
+    BreakType currentBreak = BreakType::None;
+    bool breakHome = true;
+    bool breakTalkGiven = false;
+    bool breakConsumed = false;        // the break at the end of this period is already over
+    int pendingTimeoutHome = 0;        // 0 none, 1 full, 2 short
+    int pendingTimeoutAway = 0;
+    int homeQ4Timeouts = 0;
+    int awayQ4Timeouts = 0;
+    int homeLateTimeouts = 0;          // taken after the 3:00 mark of the fourth period
+    int awayLateTimeouts = 0;
+    int homeRun = 0;                   // unanswered points
+    int awayRun = 0;
+    int lastAiTimeoutElapsed = -1000;
+    TeamTalkResult lastTalk;
+
+    // Offense plan per side (0 = home, 1 = away), instructions and queued substitutions
+    std::string offenseTarget[2];
+    std::string offensePlay[2];
+    struct ActiveInstruction {
+        PlayerInstruction type = PlayerInstruction::None;
+        float strength = 1.0f;
+        int possessionsLeft = 0;
+    };
+    std::unordered_map<std::string, ActiveInstruction> instructions;
+    PlayerFeedbackResult lastFeedback;
+    struct PendingSub {
+        bool home = true;
+        std::string outId;
+        std::string inId;
+    };
+    std::vector<PendingSub> pendingSubs;
+
     // Internal simulation methods
     void PlaySelection();
     void DefenseLogic();
@@ -249,6 +386,16 @@ private:
     void CompleteBeat();
     void FinishPossession();
     void EmitFeed(const std::string& text);
+
+    // Breaks and timeouts
+    bool TryStartBreak();
+    void StartBreak(BreakType type, bool homeTeam);
+    bool GrantTimeout(bool homeTeam);
+    bool AiWantsTimeout();
+
+    // Offense plans, feedback and queued substitutions
+    void ApplyPendingSubstitutions();
+    float InstructionStrength(const std::string& playerId, PlayerInstruction type) const;
 
     // Statistical methods
     float CalculatePlaySuccessRate(const Player& player);
