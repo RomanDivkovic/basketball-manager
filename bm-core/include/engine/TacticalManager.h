@@ -18,7 +18,10 @@ enum class OffensiveStrategy {
     THREE_POINT_HEAVY, // Heavy 3-point shooting (70% attempts are 3s)
     PACE_AND_SPACE,    // Up-tempo, spread offense
     ISOLATION,         // Isolation-heavy, star player focus
-    FAST_BREAK         // Push tempo, transition scoring
+    FAST_BREAK,        // Push tempo, transition scoring
+    PICK_AND_ROLL,     // Screens for the ball handler, roll to the rim
+    BALL_MOVEMENT,     // Move the ball around for the best shot
+    PLAY_THROUGH_PLAYER // Everything runs through one chosen player
 };
 
 /**

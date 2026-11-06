@@ -75,6 +75,7 @@ struct Player {
     int blocksThisGame;
     int turnoversThisGame;
     int foulsThisGame;
+    float morale = 0.0f;    // -1 (furious) .. +1 (fired up); moved by team talks, fades over time
 };
 
 // Team structure

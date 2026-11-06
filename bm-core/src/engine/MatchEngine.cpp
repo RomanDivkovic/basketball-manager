@@ -6,6 +6,7 @@
 #include <cmath>
 #include <random>
 #include <algorithm>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 #include <thread>
@@ -37,7 +38,7 @@ static int RandomInt(int min, int max) {
 }
 
 MatchEngine::MatchEngine() : matchState(nullptr), speedMultiplier(1), pauseEnabled(false), 
-                             homeTimeoutsRemaining(3), awayTimeoutsRemaining(3),
+                             homeTimeoutsRemaining(7), awayTimeoutsRemaining(7),
                              homeCoachingMomentum(0), awayCoachingMomentum(0),
                              homeLastCallout(CoachingCallout::KEEP_GOING), 
                              awayLastCallout(CoachingCallout::KEEP_GOING) {
@@ -82,9 +83,30 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
     matchState->possessionCount = 0;
     matchState->matchComplete = false;
     
-    // Reset timeouts (3 per half)
-    homeTimeoutsRemaining = 3;
-    awayTimeoutsRemaining = 3;
+    // NBA: 7 timeouts per team for regulation
+    homeTimeoutsRemaining = 7;
+    awayTimeoutsRemaining = 7;
+    pendingTimeoutHome = pendingTimeoutAway = 0;
+    homeQ4Timeouts = awayQ4Timeouts = homeLateTimeouts = awayLateTimeouts = 0;
+    homeRun = awayRun = 0;
+    lastAiTimeoutElapsed = -1000;
+    currentBreak = BreakType::None;
+    breakTalkGiven = false;
+    breakConsumed = false;
+    lastTalk = TeamTalkResult{};
+    offenseTarget[0].clear();
+    offenseTarget[1].clear();
+    offensePlay[0].clear();
+    offensePlay[1].clear();
+    instructions.clear();
+    lastFeedback = PlayerFeedbackResult{};
+    pendingSubs.clear();
+    beatQueue.clear();
+    beatActive = false;
+    lastEnd = PossessionEnd::None;
+    lastBallHolderId.clear();
+    feedHistory.clear();
+    feedTotal = 0;
     
     // Initialize starting five (best 5 available by ability)
     auto setupStartingFive = [](std::shared_ptr<Team> team, std::vector<std::shared_ptr<Player>>& lineup) {
@@ -104,6 +126,7 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
             p->blocksThisGame = 0;
             p->turnoversThisGame = 0;
             p->foulsThisGame = 0;
+            p->morale = 0.0f;
         }
 
         std::sort(sorted.begin(), sorted.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {
@@ -307,18 +330,27 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     // Check if current quarter is out of time
     if (matchState->timeRemaining <= 0) {
         if (matchState->quarterNumber < 4) {
-            EmitFeed("End of quarter " + std::to_string(matchState->quarterNumber) + ".");
+            if (!breaksEnabled) EmitFeed("End of quarter " + std::to_string(matchState->quarterNumber) + ".");
             AdvanceQuarter();
+            breakConsumed = false;
             prevEnd = PossessionEnd::None;
         } else if (matchState->homeScore != matchState->awayScore) {
             matchState->matchComplete = true;
             EmitFeed("Final buzzer!");
             return false;
         } else {
-            EmitFeed("Tied after regulation, overtime!");
+            if (!breaksEnabled) EmitFeed("Tied after regulation, overtime!");
             AdvanceQuarter();
+            breakConsumed = false;
             prevEnd = PossessionEnd::None;
         }
+    }
+
+    // Dead ball: queued substitutions come on, instructions wear off
+    ApplyPendingSubstitutions();
+    for (auto it = instructions.begin(); it != instructions.end();) {
+        if (--it->second.possessionsLeft <= 0) it = instructions.erase(it);
+        else ++it;
     }
 
     plan = PossessionPlan{};
@@ -364,7 +396,17 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         w *= (1.0f - p->fatigueLevel * 0.4f);
         const bool liveEntry = plan.fastBreak || plan.entry == PossessionEntry::PutBack;
         if (liveEntry && plan.entryHolder && p == plan.entryHolder) w *= 2.5f;
-        return w;
+
+        // Play through a player: the hub takes a much larger share
+        const auto scheme = plan.homeOffense ? tacticalManager->GetHomeOffensiveStrategy()
+                                             : tacticalManager->GetAwayOffensiveStrategy();
+        if (scheme == OffensiveStrategy::PLAY_THROUGH_PLAYER && p->playerId == offenseTarget[plan.homeOffense ? 0 : 1]) {
+            w *= 2.4f;
+        }
+        // Individual feedback
+        w *= 1.0f + 0.5f * InstructionStrength(p->playerId, PlayerInstruction::LookForYourShot)
+                  - 0.3f * InstructionStrength(p->playerId, PlayerInstruction::FocusOnDefense);
+        return std::max(0.1f, w);
     };
     auto ballHandler = PickWeighted(onCourtOffense, usageWeight);
 
@@ -410,6 +452,22 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     offensiveRating *= (1.0f - (ballHandler->fatigueLevel * 0.25f));
     defensiveRating *= (1.0f - (defender->fatigueLevel * 0.15f));
 
+    // Mood: a fired-up shooter converts more, a team that tuned the coach out defends worse
+    float defenseMorale = 0.0f;
+    for (const auto& d : onCourtDefense) defenseMorale += d->morale;
+    defenseMorale /= static_cast<float>(onCourtDefense.size());
+    offensiveRating *= (1.0f + 0.10f * ballHandler->morale);
+    defensiveRating *= (1.0f + 0.08f * defenseMorale);
+    for (auto& p : onCourtOffense) p->morale *= 0.985f;
+    for (auto& p : onCourtDefense) p->morale *= 0.985f;
+
+    // Defenders told to focus on defense
+    for (const auto& d : onCourtDefense) {
+        defensiveRating *= 1.0f + 0.04f * InstructionStrength(d->playerId, PlayerInstruction::FocusOnDefense);
+    }
+    float schemeEfficiency = 0.0f;   // shot quality from the scheme, the called play and feedback
+    float assistBonus = 0.0f;
+
     // Base chances
     float stealChance = 0.08f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.04f;
     float foulChance = 0.12f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.03f;
@@ -430,6 +488,30 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         threePointChance += 0.05f;
     }
     if (plan.fastBreak) threePointChance *= 0.5f;
+
+    // Called play (or the plain scheme) and individual feedback
+    const Play* activePlay = nullptr;
+    const std::string& calledPlay = offensePlay[plan.homeOffense ? 0 : 1];
+    if (!calledPlay.empty()) {
+        for (const auto& candidate : GetPlaybook()) {
+            if (candidate.id == calledPlay && candidate.scheme == offenseStrategy) activePlay = &candidate;
+        }
+    }
+    if (activePlay) {
+        threePointChance += activePlay->threeBias;
+        schemeEfficiency += activePlay->efficiency;
+        turnoverChance += activePlay->turnover;
+    } else if (offenseStrategy == OffensiveStrategy::PICK_AND_ROLL) {
+        schemeEfficiency += 0.025f;
+    } else if (offenseStrategy == OffensiveStrategy::BALL_MOVEMENT) {
+        schemeEfficiency += 0.02f;
+        turnoverChance += 0.01f;
+    }
+    if (offenseStrategy == OffensiveStrategy::BALL_MOVEMENT) assistBonus = 0.12f;
+    else if (offenseStrategy == OffensiveStrategy::PICK_AND_ROLL) assistBonus = 0.05f;
+    turnoverChance -= 0.03f * InstructionStrength(ballHandler->playerId, PlayerInstruction::SettleDown);
+    schemeEfficiency -= 0.015f * InstructionStrength(ballHandler->playerId, PlayerInstruction::LookForYourShot);
+    turnoverChance = std::max(0.01f, turnoverChance);
     threePointChance = std::min(0.8f, std::max(0.1f, threePointChance));
 
     // Build log
@@ -474,6 +556,7 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
                                * (1.0f - ballHandler->fatigueLevel * 0.2f), 0.35f, 0.7f);
         // Open-floor finishes are easier
         if (plan.fastBreak && !plan.isThree) fg2 = std::min(0.75f, fg2 * 1.10f);
+        fg2 = std::clamp(fg2 + schemeEfficiency, 0.30f, 0.78f);
         float fg3 = std::clamp(fg2 - 0.08f, 0.26f, 0.55f);
         float shotMakeProb = plan.isThree ? fg3 : fg2;
 
@@ -487,7 +570,7 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         } else if (RandomFloat() < shotMakeProb) {
             plan.end = PossessionEnd::MadeShot;
             plan.actionPhase = plan.isThree ? "three_make" : "shot_make";
-            plan.assisted = onCourtOffense.size() > 1 && RandomFloat() < (plan.isThree ? 0.82f : 0.58f);
+            plan.assisted = onCourtOffense.size() > 1 && RandomFloat() < ((plan.isThree ? 0.82f : 0.58f) + assistBonus);
             if (plan.assisted) {
                 oss << passer->firstName << " finds " << ballHandler->lastName << " for "
                     << (plan.isThree ? "a 3!" : "two!");
@@ -545,8 +628,10 @@ void MatchEngine::FlipPossession(const PossessionPlan& plan) {
 void MatchEngine::ApplyScore(const PossessionPlan& plan, int points) {
     if (plan.homeOffense) {
         matchState->homeScore += points;
+        if (points > 0) { homeRun += points; awayRun = 0; }
     } else {
         matchState->awayScore += points;
+        if (points > 0) { awayRun += points; homeRun = 0; }
     }
     plan.primary->pointsThisGame += points;
     matchState->lastScorer = plan.primary;
@@ -724,11 +809,10 @@ void MatchEngine::StartQuarter(int quarterNumber) {
     matchState->quarterNumber = quarterNumber;
     matchState->timeRemaining = (quarterNumber <= 4) ? 720 : 300; // 12 min regulation, 5 min OT
 
-    // Reset timeouts at halftime
-    if (quarterNumber == 3) {
-        homeTimeoutsRemaining = 3;
-        awayTimeoutsRemaining = 3;
-        std::cout << "\n[HALFTIME] Timeouts reset to 3 per team\n";
+    // Overtime: two timeouts per team (NBA rule 5, section VI)
+    if (quarterNumber >= 5) {
+        homeTimeoutsRemaining = 2;
+        awayTimeoutsRemaining = 2;
     }
 
     std::cout << "\n═════════════════ QUARTER " << quarterNumber << " ═════════════════\n";
@@ -1186,7 +1270,13 @@ void MatchEngine::HandlePauseMenu() {
 
 void MatchEngine::CallTimeout(bool isHomeTeam) {
     if (!matchState) return;
-    
+
+    // UI path: the request is granted at the next dead ball and handled as a break
+    if (headless) {
+        RequestTimeout(isHomeTeam, true);
+        return;
+    }
+
     int& timeouts = isHomeTeam ? homeTimeoutsRemaining : awayTimeoutsRemaining;
     std::string teamName = isHomeTeam ? matchState->homeTeam->name : matchState->awayTeam->name;
     
@@ -1196,16 +1286,6 @@ void MatchEngine::CallTimeout(bool isHomeTeam) {
     }
     
     timeouts--;
-
-    if (headless) {
-        // UI path: no console prompts; the caller handles any substitutions
-        auto timeoutTeam = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
-        for (auto& p : timeoutTeam->roster) {
-            if (p->onCourt) p->fatigueLevel = std::max(0.0f, p->fatigueLevel - 0.05f);
-        }
-        EmitFeed(teamName + " call a timeout (" + std::to_string(timeouts) + " left).");
-        return;
-    }
     
     std::cout << "\n╔════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                        ⏱️  TIMEOUT CALLED                       ║\n";
@@ -1684,6 +1764,18 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
     const auto defStrategy = homeOff ? tacticalManager->GetAwayDefensiveStrategy()
                                      : tacticalManager->GetHomeDefensiveStrategy();
     const Slot* slots = OffenseSlots(offStrategy);
+
+    // A called play (when it belongs to the scheme) picks the floor spacing; the hub player is the featured one
+    const std::string& calledPlay = offensePlay[homeOff ? 0 : 1];
+    for (const auto& pl : GetPlaybook()) {
+        if (pl.id != calledPlay || pl.scheme != offStrategy) continue;
+        if (pl.id == "five_out" || pl.id == "transition_threes") slots = kFourOutSlots;
+        else if (pl.id == "post_split" || pl.id == "dribble_drive") slots = kInsideSlots;
+    }
+    const bool pnr = (offStrategy == OffensiveStrategy::PICK_AND_ROLL);
+    const std::string& hubId = offenseTarget[homeOff ? 0 : 1];
+    std::string screenerId;   // big man who screens, then rolls to the rim
+    int screenPhase = 0;
     const bool zone = defStrategy == DefensiveStrategy::ZONE_2_3 || defStrategy == DefensiveStrategy::ZONE_3_2;
     const bool pressure = defStrategy == DefensiveStrategy::PRESS || defStrategy == DefensiveStrategy::MAN_TO_MAN;
 
@@ -1766,6 +1858,18 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
         setSpots(mv, 2.0f);
         if (allowCut && !free.empty() && RandomFloat() < 0.4f) {
             mv[free[static_cast<size_t>(RandomInt(0, static_cast<int>(free.size()) - 1))]] = rimPoint(3.0f, 6.0f, 8.0f);
+        }
+        if (!screenerId.empty() && screenerId != fromId && screenerId != toId) {
+            if (screenPhase++ % 2 == 0) {
+                // Screen on the ball: stand between the ball handler and the hoop
+                const CourtPoint hp = posOf(toId);
+                const float tx = hoop.x - hp.x;
+                const float ty = hoop.y - hp.y;
+                const float dist = std::max(0.1f, std::hypot(tx, ty));
+                mv[screenerId] = ClampToCourt(CourtPoint{hp.x + tx / dist * 3.0f, hp.y + ty / dist * 3.0f});
+            } else {
+                mv[screenerId] = rimPoint(3.0f, 6.0f, 3.0f);   // roll to the rim
+            }
         }
         placeDefense(mv, toId);
         return mv;
@@ -1864,6 +1968,25 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
             holders[static_cast<size_t>(k)] = pick ? pick : holders[static_cast<size_t>(k) - 1];
         }
     }
+    // Play through a player: the ball usually runs through the hub before the shot
+    if (offStrategy == OffensiveStrategy::PLAY_THROUGH_PLAYER && !hubId.empty() && m >= 2 && RandomFloat() < 0.6f) {
+        for (const auto& p : off) {
+            if (p->playerId == hubId && p != finalHolder && holders[static_cast<size_t>(m) - 2] != p) {
+                holders[static_cast<size_t>(m) - 1] = p;
+            }
+        }
+    }
+
+    // Pick and roll: the strongest big who is not carrying the ball sets the screens
+    if (pnr) {
+        std::shared_ptr<Player> screener;
+        for (const auto& p : off) {
+            if (p == finalHolder || p == holders[0]) continue;
+            if (!screener || p->attributes.physical > screener->attributes.physical) screener = p;
+        }
+        if (screener) screenerId = screener->playerId;
+    }
+
     const size_t startIdx = outlet ? 1 : 0;
     const std::shared_ptr<Player> assister = (end == PossessionEnd::MadeShot && plan.assisted && m >= 1)
         ? holders[static_cast<size_t>(m) - 1] : nullptr;
@@ -1989,6 +2112,13 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
         pb.ballFrom = holders[k]->playerId;
         pb.ballTo = holders[k + 1]->playerId;
         pb.startText = PassText(holders[k], holders[k + 1]);
+        if (!screenerId.empty() && RandomFloat() < 0.4f) {
+            for (const auto& p : off) {
+                if (p->playerId == screenerId) {
+                    pb.startText = Fill("{A} uses the screen from {B}.", holders[k]->lastName, p->lastName);
+                }
+            }
+        }
         pushBeat(std::move(pb));
     }
 
@@ -2343,6 +2473,10 @@ void MatchEngine::FinishPossession() {
 bool MatchEngine::StepSecond() {
     if (!matchState || matchState->matchComplete) return false;
 
+    // The UI is waiting for the coach: nothing moves until EndBreak()
+    if (currentBreak != BreakType::None) return false;
+    if (breaksEnabled && !beatActive && beatQueue.empty() && TryStartBreak()) return false;
+
     if (!beatActive) {
         if (beatQueue.empty()) {
             PossessionPlan plan;
@@ -2375,6 +2509,465 @@ int MatchEngine::StepSeconds(int seconds) {
 
 bool MatchEngine::IsPeriodBreak() const {
     return matchState && !matchState->matchComplete && matchState->timeRemaining <= 0 && !beatActive && beatQueue.empty();
+}
+
+// ============================================================================
+// Breaks, NBA timeouts and team talks
+// ============================================================================
+
+namespace {
+
+// Stable per-player temperament in [0, 1]; salt picks the trait (1 sensitivity, 2 drive, 3 pride)
+float TalkTrait(const std::string& id, int salt) {
+    const size_t h = std::hash<std::string>{}(id + "#" + std::to_string(salt));
+    return static_cast<float>(h % 1000) / 999.0f;
+}
+
+const char* TalkVerb(TeamTalkType type) {
+    switch (type) {
+        case TeamTalkType::Encourage: return "encourages the team";
+        case TeamTalkType::Praise: return "praises the team";
+        case TeamTalkType::BeAngry: return "loses his temper";
+        case TeamTalkType::MoreDefense: return "demands more defense";
+        case TeamTalkType::MoreOffense: return "demands more offense";
+        case TeamTalkType::StayCalm: return "calls for calm";
+        case TeamTalkType::SayNothing: return "says nothing";
+    }
+    return "talks to the team";
+}
+
+} // namespace
+
+void MatchEngine::SetBreaksEnabled(bool enabled) {
+    breaksEnabled = enabled;
+    breakConsumed = false;
+    if (!enabled) {
+        currentBreak = BreakType::None;
+    } else if (matchState && matchState->possessionCount == 0 && matchState->timeElapsed == 0) {
+        StartBreak(BreakType::PreMatch, true);
+    }
+}
+
+void MatchEngine::StartBreak(BreakType type, bool homeTeam) {
+    currentBreak = type;
+    breakHome = homeTeam;
+    breakTalkGiven = false;
+    lastTalk = TeamTalkResult{};
+
+    switch (type) {
+        case BreakType::PreMatch:
+            EmitFeed(matchState->homeTeam->name + " host " + matchState->awayTeam->name + ".");
+            break;
+        case BreakType::QuarterBreak:
+            EmitFeed("End of quarter " + std::to_string(matchState->quarterNumber) + ".");
+            break;
+        case BreakType::Halftime:
+            EmitFeed("Halftime.");
+            break;
+        case BreakType::Overtime:
+            EmitFeed("Tied after regulation, overtime!");
+            break;
+        default:
+            break;  // GrantTimeout writes its own line
+    }
+}
+
+void MatchEngine::EndBreak() {
+    if (currentBreak == BreakType::None) return;
+
+    if (currentBreak == BreakType::QuarterBreak || currentBreak == BreakType::Halftime ||
+        currentBreak == BreakType::Overtime) {
+        breakConsumed = true;
+    }
+    currentBreak = BreakType::None;
+
+    // Substitutions made during the break show on the floor straight away
+    if (matchState && !beatActive && beatQueue.empty()) RebuildCourtRoster();
+}
+
+bool MatchEngine::CanCallTimeout(bool isHomeTeam) const {
+    if (!matchState || matchState->matchComplete) return false;
+
+    const int remaining = isHomeTeam ? homeTimeoutsRemaining : awayTimeoutsRemaining;
+    if (remaining <= 0) return false;
+
+    if (matchState->quarterNumber == 4) {
+        if ((isHomeTeam ? homeQ4Timeouts : awayQ4Timeouts) >= 4) return false;
+        if (matchState->timeRemaining <= 180 && (isHomeTeam ? homeLateTimeouts : awayLateTimeouts) >= 2) return false;
+    }
+    return true;
+}
+
+bool MatchEngine::RequestTimeout(bool isHomeTeam, bool full) {
+    if (!matchState || currentBreak != BreakType::None || matchState->timeRemaining <= 0) return false;
+    if (!CanCallTimeout(isHomeTeam)) return false;
+
+    int& pending = isHomeTeam ? pendingTimeoutHome : pendingTimeoutAway;
+    if (pending != 0) return false;
+    pending = full ? 1 : 2;
+    return true;
+}
+
+bool MatchEngine::GrantTimeout(bool homeTeam) {
+    int& pending = homeTeam ? pendingTimeoutHome : pendingTimeoutAway;
+    const bool full = (pending == 1);
+    pending = 0;
+    if (!CanCallTimeout(homeTeam)) return false;
+
+    int& remaining = homeTeam ? homeTimeoutsRemaining : awayTimeoutsRemaining;
+    remaining--;
+    if (matchState->quarterNumber == 4) {
+        (homeTeam ? homeQ4Timeouts : awayQ4Timeouts)++;
+        if (matchState->timeRemaining <= 180) (homeTeam ? homeLateTimeouts : awayLateTimeouts)++;
+    }
+
+    // A timeout ends the run and lets the legs recover
+    homeRun = awayRun = 0;
+    const auto& team = homeTeam ? matchState->homeTeam : matchState->awayTeam;
+    for (auto& p : team->roster) {
+        if (p->onCourt) p->fatigueLevel = std::max(0.0f, p->fatigueLevel - (full ? 0.08f : 0.03f));
+    }
+
+    EmitFeed(team->name + (full ? " call a full timeout" : " call a 20-second timeout") +
+             " (" + std::to_string(remaining) + " left).");
+    StartBreak(full ? BreakType::Timeout : BreakType::ShortTimeout, homeTeam);
+    return true;
+}
+
+// The away side is run by the computer: it stops the game when the opponent is on a big run
+bool MatchEngine::AiWantsTimeout() {
+    if (!CanCallTimeout(false) || pendingTimeoutAway != 0) return false;
+    if (homeRun < 9) return false;
+    if (matchState->timeElapsed - lastAiTimeoutElapsed < 180) return false;
+    lastAiTimeoutElapsed = matchState->timeElapsed;
+    return true;
+}
+
+bool MatchEngine::TryStartBreak() {
+    // End of a period: the coach talks to the team (not once the game is decided)
+    if (matchState->timeRemaining <= 0 && !breakConsumed) {
+        const bool decided = matchState->quarterNumber >= 4 && matchState->homeScore != matchState->awayScore;
+        if (decided) return false;
+
+        BreakType type = BreakType::QuarterBreak;
+        if (matchState->quarterNumber == 2) type = BreakType::Halftime;
+        else if (matchState->quarterNumber >= 4) type = BreakType::Overtime;
+        StartBreak(type, true);
+        return true;
+    }
+
+    if (matchState->timeRemaining > 0) {
+        if (pendingTimeoutHome != 0 && GrantTimeout(true)) return true;
+        if (pendingTimeoutAway != 0 && GrantTimeout(false)) return true;
+        if (AiWantsTimeout()) {
+            pendingTimeoutAway = 1;
+            if (GrantTimeout(false)) return true;
+        }
+    }
+    return false;
+}
+
+bool MatchEngine::ApplyTeamTalk(bool isHomeTeam, TeamTalkType type, int coachMotivation) {
+    if (!matchState || currentBreak == BreakType::None || breakTalkGiven) return false;
+
+    const bool shortHuddle = (currentBreak == BreakType::ShortTimeout);
+    if (shortHuddle && (type == TeamTalkType::Encourage || type == TeamTalkType::Praise || type == TeamTalkType::BeAngry)) {
+        return false;  // twenty seconds only fit a quick instruction
+    }
+
+    const bool pre = (currentBreak == BreakType::PreMatch);
+    const int margin = isHomeTeam ? (matchState->homeScore - matchState->awayScore)
+                                  : (matchState->awayScore - matchState->homeScore);
+
+    // How sensible the message is for the situation, before individual temperament
+    float fit = 0.0f;
+    switch (type) {
+        case TeamTalkType::Encourage:   fit = pre ? 0.5f : (margin < -3 ? 0.65f : 0.25f); break;
+        case TeamTalkType::Praise:      fit = pre ? -0.1f : (margin > 3 ? 0.7f : (margin < -3 ? -0.6f : 0.1f)); break;
+        case TeamTalkType::BeAngry:     fit = pre ? -0.5f : (margin < -8 ? 0.45f : (margin > 3 ? -0.8f : -0.25f)); break;
+        case TeamTalkType::MoreDefense:
+        case TeamTalkType::MoreOffense: fit = pre ? 0.3f : (margin < 0 ? 0.45f : 0.25f); break;
+        case TeamTalkType::StayCalm:    fit = pre ? 0.35f : (std::abs(margin) <= 8 ? 0.3f : 0.1f); break;
+        case TeamTalkType::SayNothing:  fit = (!pre && margin < -6) ? -0.2f : 0.0f; break;
+    }
+
+    const float strength = shortHuddle ? 0.6f : 1.0f;
+    fit *= 0.7f;  // even a perfect message never convinces everybody
+    const float motivationBonus = (std::clamp(static_cast<float>(coachMotivation), 40.0f, 99.0f) - 70.0f) / 100.0f * 0.4f;
+    const auto& team = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+
+    TeamTalkResult result;
+    result.valid = true;
+    result.isHome = isHomeTeam;
+    result.type = type;
+
+    int positive = 0;
+    int negative = 0;
+    for (const auto& p : team->roster) {
+        if (!p || !p->active) continue;
+
+        const float sensitivity = 0.6f + 0.8f * TalkTrait(p->playerId, 1);
+        const float drive = TalkTrait(p->playerId, 2);
+        const float pride = TalkTrait(p->playerId, 3);
+
+        float r = fit * sensitivity;
+        if (type == TeamTalkType::BeAngry) r += (drive - 0.5f) * 0.5f - (pride - 0.5f) * 0.7f;
+        if (type == TeamTalkType::MoreDefense || type == TeamTalkType::MoreOffense) r += (drive - 0.5f) * 0.25f;
+        if (type != TeamTalkType::SayNothing) r += motivationBonus + RandomFloatRange(-0.45f, 0.45f);
+
+        const int mood = r > 0.22f ? 1 : (r < -0.18f ? -1 : 0);
+        float delta = (mood != 0) ? std::clamp(r * 0.30f, -0.30f, 0.30f) : r * 0.05f;
+        delta *= strength;
+        p->morale = std::clamp(p->morale + delta, -1.0f, 1.0f);
+
+        if (mood > 0) positive++;
+        if (mood < 0) negative++;
+
+        TalkReaction reaction;
+        reaction.playerId = p->playerId;
+        reaction.name = p->firstName + " " + p->lastName;
+        reaction.mood = mood;
+        reaction.delta = delta;
+        result.reactions.push_back(reaction);
+    }
+
+    // Players on the floor first, then by how strongly they reacted
+    std::stable_sort(result.reactions.begin(), result.reactions.end(), [&](const TalkReaction& a, const TalkReaction& b) {
+        bool aOn = false, bOn = false;
+        for (const auto& p : team->roster) {
+            if (p->playerId == a.playerId) aOn = p->onCourt;
+            if (p->playerId == b.playerId) bOn = p->onCourt;
+        }
+        return aOn != bOn ? aOn : false;
+    });
+
+    const int total = std::max(1, positive + negative + static_cast<int>(std::count_if(
+        result.reactions.begin(), result.reactions.end(), [](const TalkReaction& r) { return r.mood == 0; })));
+    if (positive * 10 >= total * 7) result.summary = "The whole team responds well.";
+    else if (negative * 10 >= total * 4) result.summary = "The dressing room does not like the tone.";
+    else if (positive > negative) result.summary = "Most players respond well.";
+    else if (negative > positive) result.summary = "Some players take it badly.";
+    else result.summary = "The players are unmoved.";
+
+    // Tactical side effects
+    if (type == TeamTalkType::MoreDefense) ApplyCoachingCallout(isHomeTeam, CoachingCallout::MORE_DEFENSIVE);
+    if (type == TeamTalkType::MoreOffense) ApplyCoachingCallout(isHomeTeam, CoachingCallout::MORE_OFFENSIVE);
+    if (type == TeamTalkType::StayCalm) {
+        for (auto& p : team->roster) {
+            if (p->onCourt) p->fatigueLevel = std::max(0.0f, p->fatigueLevel - 0.03f);
+        }
+    }
+
+    breakTalkGiven = true;
+    lastTalk = result;
+    EmitFeed(std::string("The coach ") + TalkVerb(type) + ". " + result.summary);
+    return true;
+}
+
+// ============================================================================
+// Offense schemes, playbook, individual feedback and queued substitutions
+// ============================================================================
+
+namespace {
+
+const char* SchemeName(OffensiveStrategy scheme) {
+    switch (scheme) {
+        case OffensiveStrategy::THREE_POINT_HEAVY: return "shoot more threes";
+        case OffensiveStrategy::INSIDE_FOCUSED: return "play more inside";
+        case OffensiveStrategy::PICK_AND_ROLL: return "pick and roll";
+        case OffensiveStrategy::BALL_MOVEMENT: return "move the ball around";
+        case OffensiveStrategy::PLAY_THROUGH_PLAYER: return "play through a player";
+        case OffensiveStrategy::PACE_AND_SPACE: return "pace and space";
+        case OffensiveStrategy::ISOLATION: return "isolation";
+        case OffensiveStrategy::FAST_BREAK: return "push the pace";
+        default: return "balanced offense";
+    }
+}
+
+const char* InstructionLabel(PlayerInstruction instruction) {
+    switch (instruction) {
+        case PlayerInstruction::SettleDown: return "settle down";
+        case PlayerInstruction::FocusOnDefense: return "focus on defense";
+        case PlayerInstruction::LookForYourShot: return "look for your shot";
+        default: return "";
+    }
+}
+
+} // namespace
+
+const std::vector<Play>& MatchEngine::GetPlaybook() {
+    static const std::vector<Play> playbook = {
+        {"five_out", "Five Out", OffensiveStrategy::THREE_POINT_HEAVY, +0.10f, +0.010f, 0.000f},
+        {"transition_threes", "Transition Threes", OffensiveStrategy::THREE_POINT_HEAVY, +0.15f, -0.010f, +0.010f},
+        {"post_split", "Post Split", OffensiveStrategy::INSIDE_FOCUSED, -0.08f, +0.020f, 0.000f},
+        {"dribble_drive", "Dribble Drive", OffensiveStrategy::INSIDE_FOCUSED, -0.06f, +0.010f, +0.010f},
+        {"high_pick_and_roll", "High Pick and Roll", OffensiveStrategy::PICK_AND_ROLL, 0.000f, +0.030f, 0.000f},
+        {"spain_pick_and_roll", "Spain Pick and Roll", OffensiveStrategy::PICK_AND_ROLL, +0.050f, +0.035f, +0.005f},
+        {"motion", "Motion Offense", OffensiveStrategy::BALL_MOVEMENT, +0.050f, +0.030f, +0.010f},
+        {"flow", "Flow Offense", OffensiveStrategy::BALL_MOVEMENT, 0.000f, +0.025f, 0.000f},
+        {"iso_star", "Star Isolation", OffensiveStrategy::PLAY_THROUGH_PLAYER, 0.000f, 0.000f, 0.000f},
+        {"elbow_hub", "Elbow Hub", OffensiveStrategy::PLAY_THROUGH_PLAYER, -0.050f, +0.010f, 0.000f},
+    };
+    return playbook;
+}
+
+bool MatchEngine::SetOffenseScheme(bool isHomeTeam, OffensiveStrategy scheme, const std::string& targetPlayerId,
+                                   const std::string& playId, std::string* error) {
+    auto fail = [&](const char* message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (!matchState) return fail("No match is running");
+
+    const auto& team = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+    std::string hubName;
+    if (scheme == OffensiveStrategy::PLAY_THROUGH_PLAYER) {
+        if (targetPlayerId.empty()) return fail("Choose the player to play through");
+        bool onFloor = false;
+        for (const auto& p : team->roster) {
+            if (p->playerId == targetPlayerId && p->onCourt) {
+                onFloor = true;
+                hubName = p->lastName;
+            }
+        }
+        if (!onFloor) return fail("The chosen player must be on the floor");
+    }
+
+    const Play* play = nullptr;
+    if (!playId.empty()) {
+        for (const auto& candidate : GetPlaybook()) {
+            if (candidate.id == playId) play = &candidate;
+        }
+        if (!play) return fail("Unknown play");
+        if (play->scheme != scheme) return fail("That play does not belong to the chosen scheme");
+    }
+
+    if (isHomeTeam) tacticalManager->SetHomeOffensiveStrategy(scheme);
+    else tacticalManager->SetAwayOffensiveStrategy(scheme);
+
+    const int side = isHomeTeam ? 0 : 1;
+    offenseTarget[side] = (scheme == OffensiveStrategy::PLAY_THROUGH_PLAYER) ? targetPlayerId : std::string();
+    offensePlay[side] = playId;
+
+    std::string line = team->name + ": " + SchemeName(scheme);
+    if (!hubName.empty()) line += " (" + hubName + ")";
+    if (play) line += ", " + play->name;
+    EmitFeed(line + ".");
+    return true;
+}
+
+float MatchEngine::InstructionStrength(const std::string& playerId, PlayerInstruction type) const {
+    auto it = instructions.find(playerId);
+    return (it != instructions.end() && it->second.type == type) ? it->second.strength : 0.0f;
+}
+
+PlayerInstruction MatchEngine::GetInstruction(const std::string& playerId) const {
+    auto it = instructions.find(playerId);
+    return it != instructions.end() ? it->second.type : PlayerInstruction::None;
+}
+
+bool MatchEngine::GiveFeedback(bool isHomeTeam, const std::string& playerId, PlayerInstruction instruction,
+                               int coachMotivation) {
+    if (!matchState || instruction == PlayerInstruction::None) return false;
+
+    const auto& team = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+    std::shared_ptr<Player> target;
+    for (const auto& p : team->roster) {
+        if (p->playerId == playerId && p->onCourt) target = p;
+    }
+    if (!target) return false;  // feedback goes to a player on the floor
+
+    const float sensitivity = 0.6f + 0.8f * TalkTrait(playerId, 1);
+    const float drive = TalkTrait(playerId, 2);
+    const float pride = TalkTrait(playerId, 3);
+    const float motivationBonus = (std::clamp(static_cast<float>(coachMotivation), 40.0f, 99.0f) - 70.0f) / 100.0f * 0.4f;
+
+    float r = 0.25f * sensitivity + motivationBonus + RandomFloatRange(-0.35f, 0.35f);
+    switch (instruction) {
+        case PlayerInstruction::SettleDown:
+            r += 0.10f - (pride - 0.5f) * 0.6f;
+            break;
+        case PlayerInstruction::FocusOnDefense:
+            r += (drive - 0.5f) * 0.4f - (target->attributes.shooting >= 15 ? 0.15f : 0.0f);  // scorers dislike fewer shots
+            break;
+        case PlayerInstruction::LookForYourShot:
+            r += (drive - 0.5f) * 0.3f + (target->attributes.shooting - 10) / 40.0f;
+            break;
+        case PlayerInstruction::None:
+            break;
+    }
+
+    const int mood = r > 0.20f ? 1 : (r < -0.10f ? -1 : 0);
+    ActiveInstruction active;
+    active.type = instruction;
+    active.strength = mood > 0 ? 1.0f : (mood == 0 ? 0.7f : 0.4f);
+    active.possessionsLeft = 14;
+    instructions[playerId] = active;
+    target->morale = std::clamp(target->morale + 0.08f * static_cast<float>(mood), -1.0f, 1.0f);
+
+    lastFeedback = PlayerFeedbackResult{};
+    lastFeedback.valid = true;
+    lastFeedback.playerId = playerId;
+    lastFeedback.name = target->firstName + " " + target->lastName;
+    lastFeedback.instruction = instruction;
+    lastFeedback.mood = mood;
+    lastFeedback.text = std::string(mood > 0 ? "responds well" : (mood < 0 ? "takes it badly, half-hearted" : "listens, but is not fully convinced"));
+
+    EmitFeed("Coach to " + target->lastName + ": " + InstructionLabel(instruction) + ". He " + lastFeedback.text + ".");
+    return true;
+}
+
+bool MatchEngine::RequestSubstitution(bool isHomeTeam, const std::string& outPlayerId, const std::string& inPlayerId) {
+    if (!matchState || matchState->matchComplete || outPlayerId == inPlayerId) return false;
+
+    const auto& team = isHomeTeam ? matchState->homeTeam : matchState->awayTeam;
+    std::shared_ptr<Player> out;
+    std::shared_ptr<Player> in;
+    for (const auto& p : team->roster) {
+        if (p->playerId == outPlayerId) out = p;
+        if (p->playerId == inPlayerId) in = p;
+    }
+    if (!out || !in || !out->onCourt || in->onCourt || in->injured || !in->active) return false;
+
+    for (const auto& queued : pendingSubs) {
+        if (queued.outId == outPlayerId || queued.inId == inPlayerId || queued.outId == inPlayerId) return false;
+    }
+    pendingSubs.push_back(PendingSub{isHomeTeam, outPlayerId, inPlayerId});
+
+    // During a break or a dead ball the change happens now, otherwise at the next dead ball
+    if (IsBreakActive() || (!beatActive && beatQueue.empty())) {
+        ApplyPendingSubstitutions();
+        if (!beatActive && beatQueue.empty() && !matchState->courtPlayers.empty()) RebuildCourtRoster();
+    }
+    return true;
+}
+
+void MatchEngine::ApplyPendingSubstitutions() {
+    if (pendingSubs.empty() || !matchState) return;
+
+    for (const auto& sub : pendingSubs) {
+        const auto& team = sub.home ? matchState->homeTeam : matchState->awayTeam;
+        std::shared_ptr<Player> out;
+        std::shared_ptr<Player> in;
+        for (const auto& p : team->roster) {
+            if (p->playerId == sub.outId) out = p;
+            if (p->playerId == sub.inId) in = p;
+        }
+        if (!out || !in || !tacticalManager->ManualSubstitution(team, out, in, matchState->timeElapsed)) continue;
+        instructions.erase(out->playerId);
+        EmitFeed("Substitution: " + in->lastName + " in for " + out->lastName + ".");
+
+        // The coach took the featured player off: the plan falls back to moving the ball
+        const int side = sub.home ? 0 : 1;
+        if (offenseTarget[side] == out->playerId) {
+            if (sub.home) tacticalManager->SetHomeOffensiveStrategy(OffensiveStrategy::BALL_MOVEMENT);
+            else tacticalManager->SetAwayOffensiveStrategy(OffensiveStrategy::BALL_MOVEMENT);
+            offenseTarget[side].clear();
+            offensePlay[side].clear();
+            EmitFeed(team->name + ": without " + out->lastName + " the team moves the ball instead.");
+        }
+    }
+    pendingSubs.clear();
 }
 
 } // namespace engine
