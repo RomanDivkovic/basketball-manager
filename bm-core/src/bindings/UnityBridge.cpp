@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -1274,6 +1275,9 @@ int CareerStart(const char* userTeamId, int startYear, int seed) {
 
 static bool WriteCareerSave(const std::string& path, std::string* error) {
     if (!career || path.empty()) { if (error) *error = "No career or file"; return false; }
+    // The previous save stays next to the file as a fallback
+    std::error_code copyError;
+    if (std::filesystem::exists(path, copyError)) std::filesystem::copy_file(path, path + ".bak", std::filesystem::copy_options::overwrite_existing, copyError);
     sqlite3* db = nullptr;
     if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
         if (error) *error = db ? sqlite3_errmsg(db) : "cannot open the file";

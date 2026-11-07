@@ -862,6 +862,63 @@ void TestRandomLeagueAndSavedCareer() {
     g_testsPassed++;
 }
 
+static std::string JsonValue(const std::string& json, const std::string& key) {
+    const std::string pattern = "\"" + key + "\":";
+    size_t at = json.find(pattern);
+    if (at == std::string::npos) return "";
+    at += pattern.size();
+    if (json[at] == '"') ++at;
+    size_t end = json.find_first_of("\",}", at);
+    return json.substr(at, end - at);
+}
+
+void TestSavedCareerResumesMidSeason() {
+    std::cout << "[TEST] Saves: a career resumes from a checkpoint in the season and in the offseason...\n";
+    const std::string base = (std::filesystem::temp_directory_path() / "bm_checkpoint_test").string();
+    std::filesystem::remove_all(base);
+    std::filesystem::create_directories(base);
+    const std::string dbPath = base + "/career.db";
+    TEST_ASSERT(GenerateRandomLeagueDb(dbPath.c_str(), 21) == 1, "A league is made");
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerStart("3", 2026, 9) == 1 && CareerEnableAutosave(dbPath.c_str()) == 1, "A career starts with autosave");
+
+    CareerVacation("month");
+    CareerVacation("month");
+    CareerVacation("week");
+    const std::string midState = CareerGetStateJson();
+    const int playedBefore = std::atoi(JsonValue(midState, "gamesPlayed").c_str());
+    TEST_ASSERT(playedBefore > 100, "Many games were played");
+    CareerEnd();
+
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerResume("3", 9, dbPath.c_str()) == 1, "The mid-season save opens");
+    const std::string resumed = CareerGetStateJson();
+    const int playedAfter = std::atoi(JsonValue(resumed, "gamesPlayed").c_str());
+    TEST_ASSERT(playedAfter > 0 && playedAfter <= playedBefore && playedBefore - playedAfter < 30 * 7, "Only the days since the last weekly checkpoint are lost");
+    TEST_ASSERT(JsonValue(resumed, "phase") == "Regular season" || JsonValue(resumed, "phase") == "Regular Season" || !JsonValue(resumed, "phase").empty(), "The season is under way");
+    CareerVacation("week");
+    TEST_ASSERT(std::atoi(JsonValue(CareerGetStateJson(), "gamesPlayed").c_str()) > playedAfter, "The resumed season plays on");
+
+    // The offseason: after the Finals the standings, draft order and prospects are back
+    CareerVacation("season_end");
+    const std::string reviewState = CareerGetStateJson();
+    const std::string champion = JsonValue(reviewState, "champion");
+    CareerEnd();
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerResume("3", 9, dbPath.c_str()) == 1, "The offseason save opens");
+    const std::string back = CareerGetStateJson();
+    TEST_ASSERT(JsonValue(back, "date") == JsonValue(reviewState, "date"), "The date is the day of the checkpoint");
+    TEST_ASSERT(JsonValue(back, "champion") == champion && !champion.empty(), "The champion is remembered");
+    const std::string draft = CareerGetDraftJson();
+    TEST_ASSERT(JsonValue(draft, "total") == "60" && draft.find("\"prospects\":[{") != std::string::npos, "The draft order and the class are back");
+    CareerVacation("new_season");
+    TEST_ASSERT(std::string(CareerGetStateJson()).find("2027/28") != std::string::npos, "The resumed career reaches the next season");
+    TEST_ASSERT(std::filesystem::exists(dbPath + ".bak"), "The previous save is kept as a backup");
+    CareerEnd();
+    std::filesystem::remove_all(base);
+    g_testsPassed++;
+}
+
 void TestRetirementAndHallOfFame() {
     std::cout << "[TEST] Career: old stars retire into the Hall of Fame and clubs retire numbers...\n";
     auto league = CreateLeague(30, 23);
@@ -1104,6 +1161,7 @@ int main() {
     TestDraftClassFromFile();
     TestRetirementAndHallOfFame();
     TestRandomLeagueAndSavedCareer();
+    TestSavedCareerResumesMidSeason();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

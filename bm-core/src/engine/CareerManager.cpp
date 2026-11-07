@@ -573,6 +573,7 @@ void CareerManager::ResolveStopWithAssistant(const CareerStop& stop) {
 }
 
 void CareerManager::StepDay() {
+    const CareerPhase phaseBefore = phase;
     switch (phase) {
         case CareerPhase::Preseason:
             if (today == RosterDeadline()) AiRosterFill();
@@ -603,6 +604,14 @@ void CareerManager::StepDay() {
     }
     ++today;
     RefreshPhase();
+
+    // Checkpoints: weekly during the season, and when the offseason stages begin
+    if (seasonStartHook) {
+        const bool weekly = phase == CareerPhase::RegularSeason && RegularSeasonDay() > 1 && (RegularSeasonDay() - 1) % 7 == 0;
+        const bool stageStart = phase != phaseBefore
+            && (phase == CareerPhase::Review || phase == CareerPhase::Offseason || phase == CareerPhase::TrainingCamp);
+        if (weekly || stageStart) seasonStartHook();
+    }
 }
 
 void CareerManager::StepRegularSeasonDay() {
@@ -1646,14 +1655,16 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
     sqlite3_busy_timeout(db, 3000);
     if (!Exec(db, "BEGIN IMMEDIATE;"
         "DROP TABLE IF EXISTS career_state; DROP TABLE IF EXISTS career_players; DROP TABLE IF EXISTS career_records;"
-        "DROP TABLE IF EXISTS career_hall; DROP TABLE IF EXISTS career_retired;"
+        "DROP TABLE IF EXISTS career_hall; DROP TABLE IF EXISTS career_retired; DROP TABLE IF EXISTS career_results; DROP TABLE IF EXISTS career_lists;"
         "CREATE TABLE career_state (key TEXT PRIMARY KEY, value TEXT);"
         "CREATE TABLE career_players (player_id TEXT PRIMARY KEY, team_id TEXT, sort_order INTEGER, first_name TEXT, last_name TEXT,"
         " position INTEGER, height REAL, weight REAL, birth_date TEXT, jersey INTEGER, pace INTEGER, shooting INTEGER, ball_control INTEGER,"
         " defense INTEGER, physical INTEGER, technical INTEGER, ability INTEGER, potential INTEGER, salary INTEGER, contract_end INTEGER, age INTEGER);"
         "CREATE TABLE career_records (player_id TEXT PRIMARY KEY, peak INTEGER, seasons INTEGER, team_id TEXT, tenure INTEGER);"
         "CREATE TABLE career_hall (player_id TEXT, name TEXT, position TEXT, team_name TEXT, year INTEGER, peak INTEGER, seasons INTEGER, number INTEGER, number_retired INTEGER);"
-        "CREATE TABLE career_retired (team_id TEXT, team_name TEXT, player_name TEXT, number INTEGER, year INTEGER);", error)) {
+        "CREATE TABLE career_retired (team_id TEXT, team_name TEXT, player_name TEXT, number INTEGER, year INTEGER);"
+        "CREATE TABLE career_results (day INTEGER, home TEXT, away TEXT, home_score INTEGER, away_score INTEGER);"
+        "CREATE TABLE career_lists (kind TEXT, idx INTEGER, value TEXT);", error)) {
         Exec(db, "ROLLBACK;", nullptr);
         return false;
     }
@@ -1667,11 +1678,15 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
 
     if (auto st = prepare("INSERT INTO career_state (key, value) VALUES (?, ?)")) {
         const std::vector<std::pair<std::string, std::string>> values = {
-            {"version", "1"}, {"user_team", userTeamId}, {"start_year", std::to_string(config.startYear)}, {"seed", std::to_string(config.seed)},
+            {"version", "2"}, {"user_team", userTeamId}, {"start_year", std::to_string(config.startYear)}, {"seed", std::to_string(config.seed)},
             {"season_year", std::to_string(seasonYear)}, {"salary_cap", std::to_string(salaryCap)}, {"luxury_line", std::to_string(luxuryLine)},
             {"talent_anchor", std::to_string(talentAnchor)}, {"wins", std::to_string(completedWins)}, {"losses", std::to_string(completedLosses)},
             {"titles", std::to_string(titlesWon)}, {"next_prospect", std::to_string(nextProspectId)}, {"retired_players", std::to_string(retiredPlayerCount)},
-            {"camp_focus", campFocus}, {"camp_intensity", std::to_string(campIntensity)}, {"coach_development", std::to_string(coachDevelopment)}};
+            {"camp_focus", campFocus}, {"camp_intensity", std::to_string(campIntensity)}, {"coach_development", std::to_string(coachDevelopment)},
+            {"phase", std::to_string(static_cast<int>(phase))}, {"today", std::to_string(today)}, {"stage_start", std::to_string(stageStartDay)},
+            {"champion", championName}, {"season_result", seasonResult}, {"season_counted", seasonCounted ? "1" : "0"},
+            {"draft_done", draftDone ? "1" : "0"}, {"custom_year", std::to_string(customProspectsYear)},
+            {"draft_class_answered", draftClassAnswered.count(seasonYear) ? "1" : "0"}, {"camp_planned", campPlanned ? "1" : "0"}};
         for (const auto& kv : values) {
             sqlite3_reset(st);
             text(st, 1, kv.first);
@@ -1707,6 +1722,9 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         }
         int order = 0;
         for (const auto& p : freeAgents) write(*p, "", order++);
+        order = 0;
+        for (const auto& p : prospects) write(*p, "#prospect", order++);
+        for (const auto& p : customProspects) write(*p, "#custom", order++);
         sqlite3_finalize(st);
     }
     if (auto st = prepare("INSERT INTO career_records VALUES (?,?,?,?,?)")) {
@@ -1740,6 +1758,36 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         }
         sqlite3_finalize(st);
     }
+    if (auto st = prepare("INSERT INTO career_results VALUES (?,?,?,?,?)")) {
+        for (int day = 1; day <= season.GetFixtureDayCount(); ++day) {
+            for (const auto& g : season.GetFixturesForDay(day)) {
+                if (!g.played) continue;
+                sqlite3_reset(st);
+                sqlite3_bind_int(st, 1, day);
+                text(st, 2, g.homeTeam->teamId);
+                text(st, 3, g.awayTeam->teamId);
+                sqlite3_bind_int(st, 4, g.homeScore);
+                sqlite3_bind_int(st, 5, g.awayScore);
+                if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+            }
+        }
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_lists VALUES (?,?,?)")) {
+        auto list = [&](const char* kind, const std::vector<std::string>& items) {
+            int index = 0;
+            for (const auto& item : items) {
+                sqlite3_reset(st);
+                text(st, 1, kind);
+                sqlite3_bind_int(st, 2, index++);
+                text(st, 3, item);
+                if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+            }
+        };
+        list("draft_order", draftOrder);
+        list("rookies", std::vector<std::string>(rookies.begin(), rookies.end()));
+        sqlite3_finalize(st);
+    }
     if (!ok || !Exec(db, "COMMIT;", error)) {
         if (error && error->empty()) *error = "The career could not be written";
         Exec(db, "ROLLBACK;", nullptr);
@@ -1758,13 +1806,15 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     if (sqlite3_prepare_v2(db, "SELECT key, value FROM career_state", -1, &st, nullptr) != SQLITE_OK) return fail("This league has no saved career");
     while (sqlite3_step(st) == SQLITE_ROW) values[ColumnText(st, 0)] = ColumnText(st, 1);
     sqlite3_finalize(st);
-    if (values["version"] != "1" || values["user_team"] != userTeamId) return fail("The saved career belongs to another club");
+    if ((values["version"] != "1" && values["version"] != "2") || values["user_team"] != userTeamId) return fail("The saved career belongs to another club");
     auto number = [&](const char* key, int fallback) { return values.count(key) ? std::atoi(values[key].c_str()) : fallback; };
 
     // Every team starts empty, then the saved players take their places
     std::map<std::string, std::shared_ptr<Team>> byId;
     for (const auto& t : teams) { t->roster.clear(); byId[t->teamId] = t; }
     freeAgents.clear();
+    prospects.clear();
+    customProspects.clear();
     if (sqlite3_prepare_v2(db, "SELECT player_id, team_id, first_name, last_name, position, height, weight, birth_date, jersey, pace, shooting,"
                                " ball_control, defense, physical, technical, ability, potential, salary, contract_end, age"
                                " FROM career_players ORDER BY team_id, sort_order", -1, &st, nullptr) != SQLITE_OK) return fail("The saved players could not be read");
@@ -1794,6 +1844,8 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
         p->active = true;
         p->injured = false;
         if (teamId.empty()) freeAgents.push_back(p);
+        else if (teamId == "#prospect") prospects.push_back(p);
+        else if (teamId == "#custom") customProspects.push_back(p);
         else if (byId.count(teamId)) byId[teamId]->roster.push_back(p);
     }
     sqlite3_finalize(st);
@@ -1839,38 +1891,53 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     campIntensity = number("camp_intensity", campIntensity);
     coachDevelopment = number("coach_development", coachDevelopment);
 
-    // Back to 1 October of the saved season with a fresh calendar
+    // The calendar goes back to the day of the checkpoint; games played since are replayed from the saved results
     seasonYear = number("season_year", seasonYear);
-    today = DateOf(seasonYear, 10, 1);
     regularStartDay = DateOf(seasonYear, 10, 21);
-    phase = CareerPhase::Preseason;
-    stageStartDay = today;
+    today = number("today", DateOf(seasonYear, 10, 1));
+    phase = static_cast<CareerPhase>(std::clamp(number("phase", 0), 0, 7));
+    stageStartDay = number("stage_start", today);
     lastRound = -1;
     lastSeriesCount = 0;
-    championName.clear();
-    seasonResult.clear();
-    seasonCounted = false;
+    championName = values.count("champion") ? values["champion"] : std::string();
+    seasonResult = values.count("season_result") ? values["season_result"] : std::string();
+    seasonCounted = number("season_counted", 0) != 0;
+    draftDone = number("draft_done", 0) != 0;
+    campPlanned = number("camp_planned", 0) != 0;
+    customProspectsYear = customProspects.empty() ? 0 : number("custom_year", 0);
+    draftClassAnswered.clear();
+    if (number("draft_class_answered", 0) != 0) draftClassAnswered.insert(seasonYear);
     draftOrder.clear();
-    prospects.clear();
     draftResults.clear();
     rookies.clear();
-    draftDone = false;
-    customProspects.clear();
-    customProspectsYear = 0;
-    draftClassAnswered.clear();
+    if (sqlite3_prepare_v2(db, "SELECT kind, value FROM career_lists ORDER BY kind, idx", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            const std::string kind = ColumnText(st, 0);
+            if (kind == "draft_order") draftOrder.push_back(ColumnText(st, 1));
+            else if (kind == "rookies") rookies.insert(ColumnText(st, 1));
+        }
+        sqlite3_finalize(st);
+    }
     summerMode = 0;
     summerGames.clear();
     summerTeams.clear();
     summerPlayers.clear();
     summerWins.clear();
-    campPlanned = false;
     acknowledged.clear();
     inbox.clear();
-    rng.seed((config.seed != 0 ? config.seed : 1u) + static_cast<unsigned>(seasonYear));
-    if (config.seed != 0) season.SetScheduleSeed(config.seed + static_cast<unsigned>(seasonYear));
+    rng.seed((config.seed != 0 ? config.seed : 1u) + static_cast<unsigned>(seasonYear) * 1000u + static_cast<unsigned>(today));
+    // The schedule must come out exactly as it did: the first season uses the plain seed, later ones add the year
+    config.startYear = number("start_year", config.startYear);
+    if (config.seed != 0) season.SetScheduleSeed(seasonYear == config.startYear ? config.seed : config.seed + static_cast<unsigned>(seasonYear));
     season.InitializeSeason(seasonYear, "NBA");
     season.LoadTeams(teams);
     season.GenerateSchedule();
+    if (sqlite3_prepare_v2(db, "SELECT day, home, away, home_score, away_score FROM career_results ORDER BY day", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            season.RecordResult(sqlite3_column_int(st, 0), ColumnText(st, 1), ColumnText(st, 2), sqlite3_column_int(st, 3), sqlite3_column_int(st, 4));
+        }
+        sqlite3_finalize(st);
+    }
     Post("Welcome back", "Your career continues on " + FormatDate(today) + ".");
     return true;
 }
