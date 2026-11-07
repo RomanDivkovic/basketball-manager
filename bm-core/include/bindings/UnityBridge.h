@@ -69,12 +69,16 @@ const char* GetEngineVersion();
 
 // League files: teams.csv + players.csv in a folder become a league database (same schema as the shipped one)
 int ImportLeagueFolder(const char* folder, const char* outDbPath);   // 0 = invalid, see GetLeagueMessage
+int GenerateRandomLeagueDb(const char* outDbPath, int seed);          // made-up 30-team league; 0 = failed, see GetLeagueMessage
 int ExportLeagueTemplate(const char* folder);                         // writes teams.csv, players.csv, README.txt
 const char* GetLeagueMessage();
 
 // Career: a dated year (preseason, 82-game season, play-in, playoffs, contracts, draft, free agency, summer league, camp)
 int CareerStart(const char* userTeamId, int startYear, int seed);
 void CareerEnd();
+int CareerHasSave(const char* leagueDbPath, const char* userTeamId);   // 1 when the league file holds a saved career for this club
+int CareerResume(const char* userTeamId, int seed, const char* leagueDbPath);   // continue from the last season start
+int CareerEnableAutosave(const char* leagueDbPath);                   // saves now and at every new season
 const char* CareerGetStateJson();
 const char* CareerContinue();                    // moves time until something needs the coach; returns the stop
 const char* CareerVacation(const char* target);  // week, month, playoffs, season_end, draft, free_agency, camp, new_season
@@ -93,6 +97,9 @@ const char* CareerGetDraftJson();
 void CareerDraftAdvance();
 int CareerDraftPick(const char* playerId);
 void CareerDraftAuto();
+int CareerLoadDraftClass(const char* path);      // draft file for the coming draft; 0 = invalid, see CareerGetMessage
+void CareerUseGeneratedDraftClass();             // the game makes up the class
+const char* CareerGetHistoryJson();              // Hall of Fame and retired numbers, newest first
 const char* CareerGetSummerJson();
 void CareerSetSummerMode(int mode);              // 1 = the coach plays, 2 = the assistant runs it
 void CareerSetTrainingPlan(const char* focus, int intensity, int coachDevelopment);

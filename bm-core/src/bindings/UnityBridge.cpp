@@ -26,6 +26,8 @@ std::string careerScheduleJson;
 std::string contractsJson;
 std::string freeAgentsJson;
 std::string draftJson;
+std::string historyJson;
+std::string careerSavePath;
 std::string summerJson;
 std::string careerMessage;
 std::string leagueMessage;
@@ -1006,8 +1008,17 @@ const char* GetTeamsJson() {
         teamsJson = "{\"teams\":[]}";
         return teamsJson.c_str();
     }
-    auto stmt = database->PrepareStatement(
-        "SELECT id, name, conference, prestige FROM teams ORDER BY id");
+    bool hasColors = false;
+    if (auto info = database->PrepareStatement("PRAGMA table_info(teams)")) {
+        while (sqlite3_step(info) == SQLITE_ROW) {
+            const char* column = reinterpret_cast<const char*>(sqlite3_column_text(info, 1));
+            if (column && std::string(column) == "away_color") hasColors = true;
+        }
+        sqlite3_finalize(info);
+    }
+    auto stmt = database->PrepareStatement(hasColors
+        ? "SELECT id, name, conference, prestige, away_color, third_color FROM teams ORDER BY id"
+        : "SELECT id, name, conference, prestige, '', '' FROM teams ORDER BY id");
     if (!stmt) {
         teamsJson = "{\"teams\":[]}";
         return teamsJson.c_str();
@@ -1022,9 +1033,13 @@ const char* GetTeamsJson() {
         const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         const char* conf = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
         int prestige = sqlite3_column_int(stmt, 3);
+        const char* awayColor = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        const char* thirdColor = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
         json << "{\"id\":\"" << id
              << "\",\"name\":\"" << EscapeJson(name ? name : "")
              << "\",\"conference\":\"" << EscapeJson(conf ? conf : "")
+             << "\",\"awayColor\":\"" << EscapeJson(awayColor ? awayColor : "")
+             << "\",\"thirdColor\":\"" << EscapeJson(thirdColor ? thirdColor : "")
              << "\",\"prestige\":" << prestige << "}";
     }
     sqlite3_finalize(stmt);
@@ -1203,6 +1218,18 @@ int ImportLeagueFolder(const char* folder, const char* outDbPath) {
     return 1;
 }
 
+int GenerateRandomLeagueDb(const char* outDbPath, int seed) {
+    if (!outDbPath) { leagueMessage = "No file given"; return 0; }
+    auto result = bm::db::GenerateRandomLeague(outDbPath, static_cast<unsigned>(seed));
+    if (!result.ok) {
+        leagueMessage.clear();
+        for (const auto& e : result.errors) leagueMessage += e + "\n";
+        return 0;
+    }
+    leagueMessage = "Random league created: " + std::to_string(result.teams) + " teams and " + std::to_string(result.players) + " players.";
+    return 1;
+}
+
 int ExportLeagueTemplate(const char* folder) {
     if (!folder || !database || !database->IsOpen()) { leagueMessage = "No league is loaded"; return 0; }
     std::string error;
@@ -1241,6 +1268,69 @@ int CareerStart(const char* userTeamId, int startYear, int seed) {
     career->Start(teams, config);
     careerLastStop = bm::engine::CareerStop();
     careerLastStop.kind = "none";
+    careerMessage.clear();
+    return 1;
+}
+
+static bool WriteCareerSave(const std::string& path, std::string* error) {
+    if (!career || path.empty()) { if (error) *error = "No career or file"; return false; }
+    sqlite3* db = nullptr;
+    if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
+        if (error) *error = db ? sqlite3_errmsg(db) : "cannot open the file";
+        if (db) sqlite3_close(db);
+        return false;
+    }
+    const bool ok = career->SaveState(db, error);
+    sqlite3_close(db);
+    return ok;
+}
+
+int CareerEnableAutosave(const char* leagueDbPath) {
+    if (!career || !leagueDbPath) return 0;
+    careerSavePath = leagueDbPath;
+    career->SetSeasonStartHook([]() {
+        std::string error;
+        if (!WriteCareerSave(careerSavePath, &error)) careerMessage = "Autosave failed: " + error;
+    });
+    std::string error;
+    if (!WriteCareerSave(careerSavePath, &error)) { careerMessage = "Autosave failed: " + error; return 0; }
+    return 1;
+}
+
+int CareerHasSave(const char* leagueDbPath, const char* userTeamId) {
+    if (!leagueDbPath || !userTeamId) return 0;
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(leagueDbPath, &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) { if (db) sqlite3_close(db); return 0; }
+    int found = 0;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM career_state WHERE key = 'user_team'", -1, &st, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW) {
+            const unsigned char* team = sqlite3_column_text(st, 0);
+            found = team && std::string(reinterpret_cast<const char*>(team)) == userTeamId ? 1 : 0;
+        }
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return found;
+}
+
+int CareerResume(const char* userTeamId, int seed, const char* leagueDbPath) {
+    if (!userTeamId || !leagueDbPath) return 0;
+    if (!CareerStart(userTeamId, 2026, seed)) return 0;
+    sqlite3* db = nullptr;
+    std::string error;
+    bool ok = sqlite3_open_v2(leagueDbPath, &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && career->LoadState(db, &error);
+    if (db) sqlite3_close(db);
+    if (!ok) {
+        careerMessage = error.empty() ? "The saved career could not be opened" : error;
+        CareerEnd();
+        return 0;
+    }
+    careerSavePath = leagueDbPath;
+    career->SetSeasonStartHook([]() {
+        std::string saveError;
+        if (!WriteCareerSave(careerSavePath, &saveError)) careerMessage = "Autosave failed: " + saveError;
+    });
     careerMessage.clear();
     return 1;
 }
@@ -1360,6 +1450,45 @@ int CareerDraftPick(const char* playerId) {
 
 void CareerDraftAuto() {
     if (career) career->DraftAutoFinish();
+}
+
+int CareerLoadDraftClass(const char* path) {
+    if (!career || !path) return 0;
+    return career->LoadDraftClass(path, &careerMessage) ? 1 : 0;
+}
+
+void CareerUseGeneratedDraftClass() {
+    if (career) career->UseGeneratedDraftClass();
+}
+
+const char* CareerGetHistoryJson() {
+    std::ostringstream json;
+    json << "{\"retiredPlayers\":" << (career ? career->RetiredPlayerCount() : 0) << ",\"hallOfFame\":[";
+    if (career) {
+        const auto& hall = career->HallOfFame();
+        for (size_t i = hall.size(); i-- > 0;) {   // newest first
+            const auto& e = hall[i];
+            json << (i + 1 < hall.size() ? "," : "")
+                 << "{\"name\":\"" << EscapeJson(e.name) << "\",\"position\":\"" << e.position
+                 << "\",\"team\":\"" << EscapeJson(e.teamName) << "\",\"year\":" << e.year
+                 << ",\"peak\":" << e.peak << ",\"seasons\":" << e.seasons << ",\"number\":" << e.number
+                 << ",\"numberRetired\":" << (e.numberRetired ? "true" : "false") << "}";
+        }
+    }
+    json << "],\"retiredNumbers\":[";
+    if (career) {
+        const auto& numbers = career->RetiredNumbers();
+        for (size_t i = numbers.size(); i-- > 0;) {
+            const auto& n = numbers[i];
+            json << (i + 1 < numbers.size() ? "," : "")
+                 << "{\"team\":\"" << EscapeJson(n.teamName) << "\",\"name\":\"" << EscapeJson(n.playerName)
+                 << "\",\"number\":" << n.number << ",\"year\":" << n.year
+                 << ",\"mine\":" << (n.teamId == career->UserTeamId() ? "true" : "false") << "}";
+        }
+    }
+    json << "]}";
+    historyJson = json.str();
+    return historyJson.c_str();
 }
 
 const char* CareerGetSummerJson() {

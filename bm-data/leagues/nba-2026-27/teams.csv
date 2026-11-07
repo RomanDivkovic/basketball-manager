@@ -1,0 +1,31 @@
+name,conference,prestige,pace,shooting,defense,rebounding,ball_handling,away_color,third_color
+Atlanta Hawks,Eastern,14,15,14,15,14,14,#E03A3E,#111111
+Boston Celtics,Eastern,13,15,15,15,14,14,#007A33,#111111
+Brooklyn Nets,Eastern,10,15,14,15,13,14,#111111,#8D9093
+Charlotte Hornets,Eastern,11,15,15,15,14,14,#00788C,#111111
+Chicago Bulls,Eastern,13,15,15,15,14,14,#CE1141,#111111
+Cleveland Cavaliers,Eastern,20,15,15,15,14,14,#860038,#111111
+Dallas Mavericks,Western,9,15,14,15,14,14,#0053BC,#111111
+Denver Nuggets,Western,19,15,15,15,14,14,#0E2240,#111111
+Detroit Pistons,Eastern,15,16,15,15,14,14,#C8102E,#111111
+Golden State Warriors,Western,15,15,15,15,14,15,#1D428A,#111111
+Houston Rockets,Western,18,15,14,15,14,14,#CE1141,#111111
+Indiana Pacers,Eastern,11,15,14,15,14,14,#002D62,#111111
+LA Clippers,Western,8,15,14,14,13,14,#C8102E,#111111
+Los Angeles Lakers,Western,17,15,15,15,14,14,#552583,#111111
+Memphis Grizzlies,Western,9,15,15,15,14,14,#5D76A9,#111111
+Miami Heat,Eastern,12,15,15,15,14,14,#98002E,#111111
+Milwaukee Bucks,Eastern,10,15,15,15,13,14,#00471B,#111111
+Minnesota Timberwolves,Western,15,15,15,15,13,14,#0C2340,#111111
+New Orleans Pelicans,Western,14,15,15,16,15,15,#0C2340,#111111
+New York Knicks,Eastern,13,15,15,15,13,14,#006BB6,#111111
+Oklahoma City Thunder,Western,18,15,14,15,14,15,#007AC1,#111111
+Orlando Magic,Eastern,17,15,15,15,14,14,#0077C0,#111111
+Philadelphia 76ers,Eastern,20,15,15,15,14,15,#006BB6,#111111
+Phoenix Suns,Western,12,15,14,15,14,15,#1D1160,#111111
+Portland Trail Blazers,Western,16,15,15,15,14,15,#111111,#E03A3E
+Sacramento Kings,Western,8,15,14,14,14,14,#5A2D81,#111111
+San Antonio Spurs,Western,19,15,15,15,14,15,#111111,#8D9093
+Toronto Raptors,Eastern,18,15,14,15,14,15,#CE1141,#111111
+Utah Jazz,Western,16,15,15,15,14,14,#002B5C,#111111
+Washington Wizards,Eastern,10,15,15,15,14,14,#E31837,#111111

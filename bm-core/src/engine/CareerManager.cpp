@@ -1,5 +1,7 @@
 #include "engine/CareerManager.h"
+#include "db/LeagueImport.h"
 #include "player/PlayerGenerator.h"
+#include <sqlite3.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -121,6 +123,13 @@ void CareerManager::Start(const std::vector<std::shared_ptr<Team>>& teamList, co
     seasonCounted = false;
     draftOrder.clear();
     prospects.clear();
+    customProspects.clear();
+    customProspectsYear = 0;
+    draftClassAnswered.clear();
+    records.clear();
+    hallOfFame.clear();
+    retiredNumbers.clear();
+    retiredPlayerCount = 0;
     draftResults.clear();
     draftDone = false;
     freeAgents.clear();
@@ -427,6 +436,14 @@ CareerStop CareerManager::FindStop(bool consume) {
                                     + ". Rosters must be 13 to 15 players by " + FormatDate(RosterDeadline()) + ".");
                 if (s.kind != "none") return s;
             }
+            if (!DraftClassChosen() && LoadedDraftClassSize() == 0) {
+                CareerStop s;
+                s.kind = "draft_class";
+                s.blocking = true;
+                s.title = "Draft class " + std::to_string(DraftYear());
+                s.detail = "Who joins the league in the " + std::to_string(DraftYear()) + " draft? Load a draft file or let the game make up the class.";
+                return s;
+            }
             if (today >= RosterDeadline() && (rosterSize < MinRosterSize() || rosterSize > MaxRosterSize())) {
                 CareerStop s;
                 s.kind = "roster_check";
@@ -522,6 +539,8 @@ CareerStop CareerManager::FindStop(bool consume) {
 void CareerManager::ResolveStopWithAssistant(const CareerStop& stop) {
     if (stop.kind == "coach_game") {
         SimulateCoachGame();
+    } else if (stop.kind == "draft_class") {
+        UseGeneratedDraftClass();
     } else if (stop.kind == "draft") {
         DraftAutoFinish();
     } else if (stop.kind == "summer_choice") {
@@ -721,6 +740,7 @@ void CareerManager::RollOverSeason() {
             p->age = seasonYear - BirthYearOf(*p);
             p->morale = 0.0f;
             p->fatigueLevel = 0.0f;
+            p->onCourt = false;
         }
     }
     for (const auto& p : freeAgents) p->age = seasonYear - BirthYearOf(*p);
@@ -730,6 +750,7 @@ void CareerManager::RollOverSeason() {
     season.InitializeSeason(seasonYear, "NBA");
     season.LoadTeams(teams);
     season.GenerateSchedule();
+    if (seasonStartHook) seasonStartHook();
 }
 
 int CareerManager::DaysToNextMilestone() const {
@@ -898,6 +919,7 @@ int CareerManager::ExpiringCount(const std::string& teamId) const {
 
 int CareerManager::FreeJersey(const Team& team, int preferred) const {
     auto taken = [&](int n) {
+        if (IsRetiredNumber(team.teamId, n)) return true;
         for (const auto& p : team.roster) if (p->jerseyNumber == n) return true;
         return false;
     };
@@ -913,7 +935,7 @@ void CareerManager::RemoveFromTeam(const std::shared_ptr<Team>& team, const std:
         [&](const std::shared_ptr<Player>& p) { return p->playerId == playerId; }), team->roster.end());
 }
 
-void CareerManager::SignPlayer(const std::shared_ptr<Team>& team, const std::shared_ptr<Player>& player, int salary, int years) {
+void CareerManager::SignPlayer(const std::shared_ptr<Team>& team, std::shared_ptr<Player> player, int salary, int years) {
     freeAgents.erase(std::remove(freeAgents.begin(), freeAgents.end(), player), freeAgents.end());
     player->salary = salary;
     player->contractEndYear = ContractStartSeason() + std::max(1, years) - 1;
@@ -1180,12 +1202,78 @@ void CareerManager::GenerateProspects() {
     std::shuffle(prospects.begin(), prospects.end(), rng);
 }
 
+void CareerManager::UseGeneratedDraftClass() {
+    draftClassAnswered.insert(seasonYear);
+}
+
+bool CareerManager::LoadDraftClass(const std::string& path, std::string* message) {
+    auto say = [&](const std::string& text) { if (message) *message = text; };
+    if (!started) { say("No career is running"); return false; }
+    if (draftDone || !draftOrder.empty()) { say("This year's draft has already started"); return false; }
+
+    db::DraftClassResult file = db::ReadDraftClassCsv(path);
+    if (!file.ok) {
+        std::string text;
+        for (const auto& e : file.errors) text += (text.empty() ? "" : "\n") + e;
+        say(text);
+        return false;
+    }
+
+    const int year = DraftYear();
+    std::vector<std::shared_ptr<Player>> loaded;
+    for (const auto& row : file.prospects) {
+        int age = 19;
+        if (row.birth.size() >= 4) age = std::clamp(year - std::atoi(row.birth.substr(0, 4).c_str()), 17, 30);
+        auto p = MakePlayer(row.ability, row.potential, age, "D");
+        p->firstName = row.first;
+        p->lastName = row.last;
+        static const std::map<std::string, Position> kPositions = {
+            {"PG", Position::PG}, {"SG", Position::SG}, {"SF", Position::SF}, {"PF", Position::PF}, {"C", Position::C}};
+        p->position = kPositions.at(row.position);
+        auto& a = p->attributes;
+        if (row.pace) a.pace = row.pace;
+        if (row.shooting) a.shooting = row.shooting;
+        if (row.ballControl) a.ballControl = row.ballControl;
+        if (row.defense) a.defense = row.defense;
+        if (row.physical) a.physical = row.physical;
+        if (row.technical) a.technical = row.technical;
+        if (row.height > 0.0) p->height = static_cast<float>(row.height);
+        if (row.weight > 0.0) p->weight = static_cast<float>(row.weight);
+        if (!row.birth.empty()) p->birthDate = row.birth;
+        loaded.push_back(p);
+    }
+    customProspects = loaded;
+    customProspectsYear = year;
+    draftClassAnswered.insert(seasonYear);
+
+    const int picks = 2 * static_cast<int>(teams.size());
+    std::string text = "Loaded " + std::to_string(loaded.size()) + " prospects for the " + std::to_string(year) + " draft.";
+    if (static_cast<int>(loaded.size()) < picks) {
+        text += " The draft has " + std::to_string(picks) + " picks, so " + std::to_string(picks - static_cast<int>(loaded.size()))
+              + " made-up players are added.";
+    }
+    say(text);
+    Post("Draft class " + std::to_string(year), text);
+    return true;
+}
+
 void CareerManager::PrepareDraft() {
     draftOrder.clear();
     draftResults.clear();
     draftDone = false;
     rookies.clear();
-    GenerateProspects();
+    if (customProspectsYear == DraftYear() && !customProspects.empty()) {
+        prospects = customProspects;
+        customProspects.clear();
+        customProspectsYear = 0;
+        // A short file is topped up with made-up players so every pick has someone to take
+        const size_t picks = 2 * teams.size();
+        while (prospects.size() < picks) {
+            prospects.push_back(MakePlayer(55 + static_cast<int>(rng() % 6), 62 + static_cast<int>(rng() % 8), 19 + static_cast<int>(rng() % 3), "D"));
+        }
+    } else {
+        GenerateProspects();
+    }
 
     std::vector<std::string> worstFirst;
     auto standings = season.GetStandings("");
@@ -1493,6 +1581,7 @@ void CareerManager::ApplyProgression() {
     }
 
     // Veterans retire
+    UpdateCareerRecords();
     std::uniform_real_distribution<double> roll(0.0, 1.0);
     for (const auto& team : teams) {
         std::vector<std::shared_ptr<Player>> leaving;
@@ -1501,9 +1590,14 @@ void CareerManager::ApplyProgression() {
             if (age >= 37 && p->attributes.currentAbility < 76 && roll(rng) < 0.6) leaving.push_back(p);
         }
         for (const auto& p : leaving) {
+            Retire(p, team);
             RemoveFromTeam(team, p->playerId);
             if (team->teamId == userTeamId) retired.push_back(FullName(*p));
         }
+    }
+    for (const auto& p : freeAgents) {
+        const int age = seasonYear + 1 - BirthYearOf(*p);
+        if (age >= 37 && p->attributes.currentAbility < 76) Retire(p, nullptr);
     }
     freeAgents.erase(std::remove_if(freeAgents.begin(), freeAgents.end(), [&](const std::shared_ptr<Player>& p) {
         const int age = seasonYear + 1 - BirthYearOf(*p);
@@ -1522,6 +1616,338 @@ void CareerManager::ApplyProgression() {
         text += ".";
     }
     Post("Training camp results", text);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saving and loading (the league as it stands when a season begins)
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+bool Exec(sqlite3* db, const std::string& sql, std::string* error) {
+    char* message = nullptr;
+    if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &message) != SQLITE_OK) {
+        if (error) *error = message ? message : "database error";
+        sqlite3_free(message);
+        return false;
+    }
+    return true;
+}
+
+std::string ColumnText(sqlite3_stmt* st, int column) {
+    const unsigned char* text = sqlite3_column_text(st, column);
+    return text ? reinterpret_cast<const char*>(text) : "";
+}
+
+} // namespace
+
+bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
+    if (!db || !started) { if (error) *error = "No career to save"; return false; }
+    sqlite3_busy_timeout(db, 3000);
+    if (!Exec(db, "BEGIN IMMEDIATE;"
+        "DROP TABLE IF EXISTS career_state; DROP TABLE IF EXISTS career_players; DROP TABLE IF EXISTS career_records;"
+        "DROP TABLE IF EXISTS career_hall; DROP TABLE IF EXISTS career_retired;"
+        "CREATE TABLE career_state (key TEXT PRIMARY KEY, value TEXT);"
+        "CREATE TABLE career_players (player_id TEXT PRIMARY KEY, team_id TEXT, sort_order INTEGER, first_name TEXT, last_name TEXT,"
+        " position INTEGER, height REAL, weight REAL, birth_date TEXT, jersey INTEGER, pace INTEGER, shooting INTEGER, ball_control INTEGER,"
+        " defense INTEGER, physical INTEGER, technical INTEGER, ability INTEGER, potential INTEGER, salary INTEGER, contract_end INTEGER, age INTEGER);"
+        "CREATE TABLE career_records (player_id TEXT PRIMARY KEY, peak INTEGER, seasons INTEGER, team_id TEXT, tenure INTEGER);"
+        "CREATE TABLE career_hall (player_id TEXT, name TEXT, position TEXT, team_name TEXT, year INTEGER, peak INTEGER, seasons INTEGER, number INTEGER, number_retired INTEGER);"
+        "CREATE TABLE career_retired (team_id TEXT, team_name TEXT, player_name TEXT, number INTEGER, year INTEGER);", error)) {
+        Exec(db, "ROLLBACK;", nullptr);
+        return false;
+    }
+    bool ok = true;
+    auto prepare = [&](const char* sql) {
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) ok = false;
+        return st;
+    };
+    auto text = [](sqlite3_stmt* st, int i, const std::string& v) { sqlite3_bind_text(st, i, v.c_str(), -1, SQLITE_TRANSIENT); };
+
+    if (auto st = prepare("INSERT INTO career_state (key, value) VALUES (?, ?)")) {
+        const std::vector<std::pair<std::string, std::string>> values = {
+            {"version", "1"}, {"user_team", userTeamId}, {"start_year", std::to_string(config.startYear)}, {"seed", std::to_string(config.seed)},
+            {"season_year", std::to_string(seasonYear)}, {"salary_cap", std::to_string(salaryCap)}, {"luxury_line", std::to_string(luxuryLine)},
+            {"talent_anchor", std::to_string(talentAnchor)}, {"wins", std::to_string(completedWins)}, {"losses", std::to_string(completedLosses)},
+            {"titles", std::to_string(titlesWon)}, {"next_prospect", std::to_string(nextProspectId)}, {"retired_players", std::to_string(retiredPlayerCount)},
+            {"camp_focus", campFocus}, {"camp_intensity", std::to_string(campIntensity)}, {"coach_development", std::to_string(coachDevelopment)}};
+        for (const auto& kv : values) {
+            sqlite3_reset(st);
+            text(st, 1, kv.first);
+            text(st, 2, kv.second);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        }
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_players VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+        auto write = [&](const Player& p, const std::string& teamId, int order) {
+            sqlite3_reset(st);
+            text(st, 1, p.playerId);
+            text(st, 2, teamId);
+            sqlite3_bind_int(st, 3, order);
+            text(st, 4, p.firstName);
+            text(st, 5, p.lastName);
+            sqlite3_bind_int(st, 6, static_cast<int>(p.position));
+            sqlite3_bind_double(st, 7, p.height);
+            sqlite3_bind_double(st, 8, p.weight);
+            text(st, 9, p.birthDate);
+            sqlite3_bind_int(st, 10, p.jerseyNumber);
+            const auto& a = p.attributes;
+            const int values[] = {a.pace, a.shooting, a.ballControl, a.defense, a.physical, a.technical, a.currentAbility, a.potentialAbility, p.salary, p.contractEndYear, p.age};
+            for (int i = 0; i < 11; ++i) sqlite3_bind_int(st, 11 + i, values[i]);
+            if (sqlite3_step(st) != SQLITE_DONE) {
+                ok = false;
+                if (error && error->empty()) *error = "player " + p.playerId + " (" + teamId + "): " + sqlite3_errmsg(db);
+            }
+        };
+        for (const auto& t : teams) {
+            int order = 0;
+            for (const auto& p : t->roster) write(*p, t->teamId, order++);
+        }
+        int order = 0;
+        for (const auto& p : freeAgents) write(*p, "", order++);
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_records VALUES (?,?,?,?,?)")) {
+        for (const auto& kv : records) {
+            sqlite3_reset(st);
+            text(st, 1, kv.first);
+            sqlite3_bind_int(st, 2, kv.second.peak);
+            sqlite3_bind_int(st, 3, kv.second.seasons);
+            text(st, 4, kv.second.teamId);
+            sqlite3_bind_int(st, 5, kv.second.tenure);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        }
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_hall VALUES (?,?,?,?,?,?,?,?,?)")) {
+        for (const auto& e : hallOfFame) {
+            sqlite3_reset(st);
+            text(st, 1, e.playerId); text(st, 2, e.name); text(st, 3, e.position); text(st, 4, e.teamName);
+            sqlite3_bind_int(st, 5, e.year); sqlite3_bind_int(st, 6, e.peak); sqlite3_bind_int(st, 7, e.seasons);
+            sqlite3_bind_int(st, 8, e.number); sqlite3_bind_int(st, 9, e.numberRetired ? 1 : 0);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        }
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_retired VALUES (?,?,?,?,?)")) {
+        for (const auto& n : retiredNumbers) {
+            sqlite3_reset(st);
+            text(st, 1, n.teamId); text(st, 2, n.teamName); text(st, 3, n.playerName);
+            sqlite3_bind_int(st, 4, n.number); sqlite3_bind_int(st, 5, n.year);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        }
+        sqlite3_finalize(st);
+    }
+    if (!ok || !Exec(db, "COMMIT;", error)) {
+        if (error && error->empty()) *error = "The career could not be written";
+        Exec(db, "ROLLBACK;", nullptr);
+        return false;
+    }
+    return true;
+}
+
+bool CareerManager::LoadState(sqlite3* db, std::string* error) {
+    auto fail = [&](const std::string& text) { if (error) *error = text; return false; };
+    if (!db || !started) return fail("No career is running");
+    sqlite3_busy_timeout(db, 3000);
+
+    std::map<std::string, std::string> values;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT key, value FROM career_state", -1, &st, nullptr) != SQLITE_OK) return fail("This league has no saved career");
+    while (sqlite3_step(st) == SQLITE_ROW) values[ColumnText(st, 0)] = ColumnText(st, 1);
+    sqlite3_finalize(st);
+    if (values["version"] != "1" || values["user_team"] != userTeamId) return fail("The saved career belongs to another club");
+    auto number = [&](const char* key, int fallback) { return values.count(key) ? std::atoi(values[key].c_str()) : fallback; };
+
+    // Every team starts empty, then the saved players take their places
+    std::map<std::string, std::shared_ptr<Team>> byId;
+    for (const auto& t : teams) { t->roster.clear(); byId[t->teamId] = t; }
+    freeAgents.clear();
+    if (sqlite3_prepare_v2(db, "SELECT player_id, team_id, first_name, last_name, position, height, weight, birth_date, jersey, pace, shooting,"
+                               " ball_control, defense, physical, technical, ability, potential, salary, contract_end, age"
+                               " FROM career_players ORDER BY team_id, sort_order", -1, &st, nullptr) != SQLITE_OK) return fail("The saved players could not be read");
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        auto p = std::make_shared<Player>();
+        p->playerId = ColumnText(st, 0);
+        const std::string teamId = ColumnText(st, 1);
+        p->firstName = ColumnText(st, 2);
+        p->lastName = ColumnText(st, 3);
+        p->position = static_cast<Position>(std::clamp(sqlite3_column_int(st, 4), 0, 4));
+        p->height = static_cast<float>(sqlite3_column_double(st, 5));
+        p->weight = static_cast<float>(sqlite3_column_double(st, 6));
+        p->birthDate = ColumnText(st, 7);
+        p->jerseyNumber = sqlite3_column_int(st, 8);
+        auto& a = p->attributes;
+        a.pace = sqlite3_column_int(st, 9);
+        a.shooting = sqlite3_column_int(st, 10);
+        a.ballControl = sqlite3_column_int(st, 11);
+        a.defense = sqlite3_column_int(st, 12);
+        a.physical = sqlite3_column_int(st, 13);
+        a.technical = sqlite3_column_int(st, 14);
+        a.currentAbility = sqlite3_column_int(st, 15);
+        a.potentialAbility = sqlite3_column_int(st, 16);
+        p->salary = sqlite3_column_int(st, 17);
+        p->contractEndYear = sqlite3_column_int(st, 18);
+        p->age = sqlite3_column_int(st, 19);
+        p->active = true;
+        p->injured = false;
+        if (teamId.empty()) freeAgents.push_back(p);
+        else if (byId.count(teamId)) byId[teamId]->roster.push_back(p);
+    }
+    sqlite3_finalize(st);
+
+    records.clear();
+    if (sqlite3_prepare_v2(db, "SELECT player_id, peak, seasons, team_id, tenure FROM career_records", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            records[ColumnText(st, 0)] = CareerRecord{sqlite3_column_int(st, 1), sqlite3_column_int(st, 2), ColumnText(st, 3), sqlite3_column_int(st, 4)};
+        }
+        sqlite3_finalize(st);
+    }
+    hallOfFame.clear();
+    if (sqlite3_prepare_v2(db, "SELECT player_id, name, position, team_name, year, peak, seasons, number, number_retired FROM career_hall", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            HallOfFameEntry e;
+            e.playerId = ColumnText(st, 0); e.name = ColumnText(st, 1); e.position = ColumnText(st, 2); e.teamName = ColumnText(st, 3);
+            e.year = sqlite3_column_int(st, 4); e.peak = sqlite3_column_int(st, 5); e.seasons = sqlite3_column_int(st, 6);
+            e.number = sqlite3_column_int(st, 7); e.numberRetired = sqlite3_column_int(st, 8) != 0;
+            hallOfFame.push_back(e);
+        }
+        sqlite3_finalize(st);
+    }
+    retiredNumbers.clear();
+    if (sqlite3_prepare_v2(db, "SELECT team_id, team_name, player_name, number, year FROM career_retired", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            RetiredNumber n;
+            n.teamId = ColumnText(st, 0); n.teamName = ColumnText(st, 1); n.playerName = ColumnText(st, 2);
+            n.number = sqlite3_column_int(st, 3); n.year = sqlite3_column_int(st, 4);
+            retiredNumbers.push_back(n);
+        }
+        sqlite3_finalize(st);
+    }
+
+    salaryCap = number("salary_cap", salaryCap);
+    luxuryLine = number("luxury_line", luxuryLine);
+    talentAnchor = values.count("talent_anchor") ? std::atof(values["talent_anchor"].c_str()) : talentAnchor;
+    completedWins = number("wins", 0);
+    completedLosses = number("losses", 0);
+    titlesWon = number("titles", 0);
+    nextProspectId = number("next_prospect", 1);
+    retiredPlayerCount = number("retired_players", 0);
+    if (values.count("camp_focus")) campFocus = values["camp_focus"];
+    campIntensity = number("camp_intensity", campIntensity);
+    coachDevelopment = number("coach_development", coachDevelopment);
+
+    // Back to 1 October of the saved season with a fresh calendar
+    seasonYear = number("season_year", seasonYear);
+    today = DateOf(seasonYear, 10, 1);
+    regularStartDay = DateOf(seasonYear, 10, 21);
+    phase = CareerPhase::Preseason;
+    stageStartDay = today;
+    lastRound = -1;
+    lastSeriesCount = 0;
+    championName.clear();
+    seasonResult.clear();
+    seasonCounted = false;
+    draftOrder.clear();
+    prospects.clear();
+    draftResults.clear();
+    rookies.clear();
+    draftDone = false;
+    customProspects.clear();
+    customProspectsYear = 0;
+    draftClassAnswered.clear();
+    summerMode = 0;
+    summerGames.clear();
+    summerTeams.clear();
+    summerPlayers.clear();
+    summerWins.clear();
+    campPlanned = false;
+    acknowledged.clear();
+    inbox.clear();
+    rng.seed((config.seed != 0 ? config.seed : 1u) + static_cast<unsigned>(seasonYear));
+    if (config.seed != 0) season.SetScheduleSeed(config.seed + static_cast<unsigned>(seasonYear));
+    season.InitializeSeason(seasonYear, "NBA");
+    season.LoadTeams(teams);
+    season.GenerateSchedule();
+    Post("Welcome back", "Your career continues on " + FormatDate(today) + ".");
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Retirement, Hall of Fame and retired numbers
+// ---------------------------------------------------------------------------------------------
+
+bool CareerManager::IsRetiredNumber(const std::string& teamId, int number) const {
+    for (const auto& r : retiredNumbers) if (r.teamId == teamId && r.number == number) return true;
+    return false;
+}
+
+// Runs once a season, after progression: peak rating, years in the league and years with the same club
+void CareerManager::UpdateCareerRecords() {
+    for (const auto& team : teams) {
+        for (const auto& p : team->roster) {
+            auto found = records.find(p->playerId);
+            if (found == records.end()) {
+                // A player we have not seen yet: guess his past from his age
+                CareerRecord fresh;
+                const int age = seasonYear + 1 - BirthYearOf(*p);
+                fresh.seasons = std::max(0, age - 20);
+                fresh.peak = p->attributes.currentAbility + std::max(0, age - 30);
+                fresh.teamId = team->teamId;
+                found = records.emplace(p->playerId, fresh).first;
+            }
+            CareerRecord& r = found->second;
+            ++r.seasons;
+            r.peak = std::max(r.peak, p->attributes.currentAbility);
+            if (r.teamId == team->teamId) ++r.tenure;
+            else { r.teamId = team->teamId; r.tenure = 1; }
+        }
+    }
+}
+
+void CareerManager::Retire(const std::shared_ptr<Player>& p, const std::shared_ptr<Team>& team) {
+    ++retiredPlayerCount;
+    auto found = records.find(p->playerId);
+    CareerRecord r;
+    if (found != records.end()) r = found->second;
+    else {
+        const int age = seasonYear + 1 - BirthYearOf(*p);
+        r.seasons = std::max(0, age - 20);
+        r.peak = p->attributes.currentAbility + std::max(0, age - 30);
+    }
+    // Hall of Fame: a long career at the very top, or a very long one as a star
+    const bool famous = (r.peak >= 90 && r.seasons >= 8) || (r.peak >= 86 && r.seasons >= 14);
+    if (!famous) return;
+
+    static const char* kPositions[] = {"PG", "SG", "SF", "PF", "C"};
+    HallOfFameEntry entry;
+    entry.playerId = p->playerId;
+    entry.name = FullName(*p);
+    entry.position = kPositions[std::clamp(static_cast<int>(p->position), 0, 4)];
+    entry.year = seasonYear + 1;
+    entry.peak = r.peak;
+    entry.seasons = r.seasons;
+    entry.number = p->jerseyNumber;
+    auto club = team ? team : FindTeam(r.teamId);
+    entry.teamName = club ? club->name : std::string("Free agent");
+    std::string text = entry.name + " retires after " + std::to_string(r.seasons) + " seasons and goes into the Hall of Fame.";
+
+    // A club retires the number of a Hall of Famer who gave it six years in a row
+    if (team && r.teamId == team->teamId && r.tenure >= 6 && !IsRetiredNumber(team->teamId, p->jerseyNumber)) {
+        RetiredNumber number;
+        number.teamId = team->teamId;
+        number.teamName = team->name;
+        number.playerName = entry.name;
+        number.number = p->jerseyNumber;
+        number.year = entry.year;
+        retiredNumbers.push_back(number);
+        entry.numberRetired = true;
+        text += " " + team->name + " retire his number " + std::to_string(p->jerseyNumber) + ".";
+    }
+    hallOfFame.push_back(entry);
+    Post("Hall of Fame", text);
 }
 
 } // namespace engine

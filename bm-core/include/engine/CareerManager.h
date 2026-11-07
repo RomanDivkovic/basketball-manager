@@ -3,6 +3,7 @@
 #include "common/Types.h"
 #include "engine/SeasonManager.h"
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <random>
@@ -10,6 +11,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+struct sqlite3;
 
 namespace bm {
 namespace engine {
@@ -65,6 +68,26 @@ struct DraftPickRecord {
     std::string teamId;
     std::string playerId;
     std::string playerName;
+};
+
+struct HallOfFameEntry {
+    std::string playerId;
+    std::string name;
+    std::string position;
+    std::string teamName;      // last club
+    int year = 0;              // the year he retired (the season ended in June of that year)
+    int peak = 0;
+    int seasons = 0;
+    int number = 0;
+    bool numberRetired = false;
+};
+
+struct RetiredNumber {
+    std::string teamId;
+    std::string teamName;
+    std::string playerName;
+    int number = 0;
+    int year = 0;
 };
 
 struct SummerGame {
@@ -168,6 +191,13 @@ public:
     void DraftAdvanceToUser();                // computer picks until the coach is on the clock or the draft ends
     void DraftAutoFinish();                   // the assistant makes every remaining pick for the coach too
 
+    // The class for the draft in June after this season: from a file (see docs/MODDING.md) or made up by the game
+    int DraftYear() const { return seasonYear + 1; }
+    bool LoadDraftClass(const std::string& path, std::string* message);
+    void UseGeneratedDraftClass();
+    bool DraftClassChosen() const { return draftClassAnswered.count(seasonYear) > 0; }
+    int LoadedDraftClassSize() const { return customProspectsYear == seasonYear + 1 ? static_cast<int>(customProspects.size()) : 0; }
+
     // ---- summer league and camp ----
     // mode: 0 = undecided, 1 = the coach plays his team's games, 2 = the assistant runs them
     void SetSummerLeagueMode(int mode) { summerMode = mode; }
@@ -183,6 +213,21 @@ public:
     static int MinRosterSize() { return 13; }
     static int MaxRosterSize() { return 15; }
     bool AssistantFillRoster();               // trims or fills the coach's roster to the legal size
+
+    // ---- saving: the whole league as it stands on 1 October, written into the career's own database ----
+    bool SaveState(sqlite3* db, std::string* error) const;
+    bool LoadState(sqlite3* db, std::string* error);                       // call right after Start(); returns to that preseason
+    void SetSeasonStartHook(std::function<void()> hook) { seasonStartHook = std::move(hook); }
+
+    // ---- retirement, Hall of Fame and retired numbers ----
+    const std::vector<HallOfFameEntry>& HallOfFame() const { return hallOfFame; }          // oldest first
+    const std::vector<RetiredNumber>& RetiredNumbers() const { return retiredNumbers; }
+    int RetiredPlayerCount() const { return retiredPlayerCount; }
+    bool IsRetiredNumber(const std::string& teamId, int number) const;
+    // For tests and restoring a saved career
+    void SetCareerRecord(const std::string& playerId, int peak, int seasons, const std::string& teamId, int tenure) {
+        records[playerId] = CareerRecord{peak, seasons, teamId, tenure};
+    }
 
     // For tests and the bridge
     unsigned Hash(const std::string& text) const;
@@ -222,6 +267,9 @@ private:
     std::vector<DraftPickRecord> draftResults;
     std::set<std::string> rookies;
     bool draftDone = false;
+    std::vector<std::shared_ptr<Player>> customProspects;   // class loaded from a file, used by the draft in customProspectsYear
+    int customProspectsYear = 0;
+    std::set<int> draftClassAnswered;                       // season years where the coach has chosen file or generated
     std::vector<std::shared_ptr<Player>> freeAgents;
     int summerMode = 0;
     std::vector<SummerGame> summerGames;
@@ -235,6 +283,17 @@ private:
     std::string mentee;
     bool campPlanned = false;
     int nextProspectId = 1;
+    struct CareerRecord {
+        int peak = 0;          // best rating seen
+        int seasons = 0;       // seasons in the league
+        std::string teamId;    // current club
+        int tenure = 0;        // seasons in a row with that club
+    };
+    std::map<std::string, CareerRecord> records;
+    std::vector<HallOfFameEntry> hallOfFame;
+    std::vector<RetiredNumber> retiredNumbers;
+    int retiredPlayerCount = 0;
+    std::function<void()> seasonStartHook;       // called when a new season begins (autosave)
     double talentAnchor = 0.0;      // average of every team's ten best players when the career began
 
     // calendar anchors
@@ -272,7 +331,7 @@ private:
     void AiFreeAgencyDay();
     void AiRosterFill();
     void FixRoster(const std::shared_ptr<Team>& team);
-    void SignPlayer(const std::shared_ptr<Team>& team, const std::shared_ptr<Player>& player, int salary, int years);
+    void SignPlayer(const std::shared_ptr<Team>& team, std::shared_ptr<Player> player, int salary, int years);   // by value: the caller may hold a reference into freeAgents
     void RemoveFromTeam(const std::shared_ptr<Team>& team, const std::string& playerId);
     int FreeJersey(const Team& team, int preferred) const;
     double AskFactor() const;
@@ -292,6 +351,8 @@ private:
     void ApplyProgression();
     int RollProgression(const Player& player, bool isUserTeam, bool summer);
     void ApplyDelta(Player& player, int delta, bool isUserTeam);
+    void UpdateCareerRecords();
+    void Retire(const std::shared_ptr<Player>& player, const std::shared_ptr<Team>& team);
 };
 
 } // namespace engine

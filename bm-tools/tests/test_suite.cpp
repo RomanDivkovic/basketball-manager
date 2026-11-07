@@ -561,6 +561,8 @@ static std::vector<std::shared_ptr<bm::Team>> CreateLeague(int teamCount, unsign
 static void ScriptedCoach(CareerManager& c, const CareerStop& stop) {
     if (stop.kind == "coach_game") {
         c.SimulateCoachGame();
+    } else if (stop.kind == "draft_class") {
+        c.UseGeneratedDraftClass();
     } else if (stop.kind == "draft") {
         c.DraftAdvanceToUser();
         while (c.UserOnClock() && !c.Prospects().empty()) {
@@ -711,6 +713,9 @@ void TestCoachGameCanBePlayedLive() {
     cfg.seed = 1;
     career.Start(league, cfg);
 
+    CareerStop classStop = career.Continue();
+    TEST_ASSERT(classStop.kind == "draft_class" && classStop.blocking, "A new season first asks about the draft class");
+    career.UseGeneratedDraftClass();
     CareerStop stop = career.Continue();
     TEST_ASSERT(stop.kind == "coach_game" && stop.blocking, "The first stop is the coach's match");
     TEST_ASSERT(career.Continue().kind == "coach_game", "Time does not move past an unplayed match");
@@ -816,6 +821,141 @@ void TestDraftHasSixtyPicks() {
     g_testsPassed++;
 }
 
+void TestRandomLeagueAndSavedCareer() {
+    std::cout << "[TEST] League and saves: a random league is invented, autosaved and resumed...\n";
+    const std::string base = (std::filesystem::temp_directory_path() / "bm_save_test").string();
+    std::filesystem::remove_all(base);
+    std::filesystem::create_directories(base);
+    const std::string dbPath = base + "/career.db";
+
+    TEST_ASSERT(GenerateRandomLeagueDb(dbPath.c_str(), 11) == 1, "A random league can be made");
+    TEST_ASSERT(GenerateRandomLeagueDb((base + "/same.db").c_str(), 11) == 1, "...again with the same seed");
+    LoadDatabase(dbPath.c_str());
+    const std::string teams = GetTeamsJson();
+    TEST_ASSERT(teams.find("\"Boston Celtics\"") == std::string::npos && teams.find("awayColor\":\"#") != std::string::npos,
+                "Random clubs are invented and carry kit colours");
+    TEST_ASSERT(CareerStart("1", 2026, 5) == 1, "A career starts in the random league");
+    TEST_ASSERT(CareerHasSave(dbPath.c_str(), "1") == 0, "Nothing is saved before autosave is switched on");
+    TEST_ASSERT(CareerEnableAutosave(dbPath.c_str()) == 1, "Autosave writes the starting position");
+    TEST_ASSERT(CareerHasSave(dbPath.c_str(), "1") == 1 && CareerHasSave(dbPath.c_str(), "2") == 0, "The save belongs to the club");
+
+    CareerVacation("new_season");   // the autosave fires when the new season begins
+    const std::string rosterBefore = GetTeamRosterDetailsJson("1");
+    const std::string stateBefore = CareerGetStateJson();
+    TEST_ASSERT(stateBefore.find("2027/28") != std::string::npos, "The career is in its second season");
+    CareerEnd();
+
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerResume("1", 5, dbPath.c_str()) == 1, "The saved career can be resumed");
+    TEST_ASSERT(std::string(CareerGetStateJson()).find("2027/28") != std::string::npos, "It resumes in the second season");
+    TEST_ASSERT(GetTeamRosterDetailsJson("1") == rosterBefore, "The coach's squad is exactly as it was");
+    TEST_ASSERT(CareerResume("2", 5, dbPath.c_str()) == 0, "Another club cannot open the save");
+
+    // The resumed career plays on
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerResume("1", 5, dbPath.c_str()) == 1, "Resume works again");
+    CareerVacation("month");
+    TEST_ASSERT(std::string(CareerGetStateJson()).find("\"phase\":\"Regular Season\"") != std::string::npos
+                || std::string(CareerGetStateJson()).find("Regular") != std::string::npos, "The resumed season is played");
+    CareerEnd();
+    std::filesystem::remove_all(base);
+    g_testsPassed++;
+}
+
+void TestRetirementAndHallOfFame() {
+    std::cout << "[TEST] Career: old stars retire into the Hall of Fame and clubs retire numbers...\n";
+    auto league = CreateLeague(30, 23);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 8;
+    career.Start(league, cfg);
+
+    // Ten ageing stars with long careers at their clubs, and one ordinary old player
+    std::map<std::string, int> numbers;
+    for (int i = 0; i < 10; ++i) {
+        auto p = league[i + 1]->roster[0];
+        p->birthDate = "1980-05-05";
+        p->attributes.currentAbility = 70;
+        p->attributes.potentialAbility = 70;
+        p->contractEndYear = 2035;
+        numbers[p->playerId] = p->jerseyNumber;
+        career.SetCareerRecord(p->playerId, 95, 18, league[i + 1]->teamId, 9);
+    }
+    auto ordinary = league[12]->roster[0];
+    ordinary->birthDate = "1980-05-05";
+    ordinary->attributes.currentAbility = 60;
+    ordinary->attributes.potentialAbility = 60;
+    ordinary->contractEndYear = 2035;
+    career.SetCareerRecord(ordinary->playerId, 66, 15, league[12]->teamId, 9);
+
+    career.Vacation("new_season");
+    TEST_ASSERT(career.RetiredPlayerCount() >= 1, "Some of the oldest players retire");
+    TEST_ASSERT(!career.HallOfFame().empty(), "A retired star enters the Hall of Fame");
+    for (const auto& entry : career.HallOfFame()) {
+        TEST_ASSERT(entry.playerId != ordinary->playerId, "An ordinary player does not enter the Hall of Fame");
+        TEST_ASSERT(entry.peak >= 90 && entry.year == 2027, "Hall of Famers peaked high and retired in 2027");
+    }
+    TEST_ASSERT(!career.RetiredNumbers().empty(), "A club retires the number of a long-serving Hall of Famer");
+    for (const auto& retired : career.RetiredNumbers()) {
+        TEST_ASSERT(career.IsRetiredNumber(retired.teamId, retired.number), "The retired number is registered");
+        for (const auto& team : league) {
+            if (team->teamId != retired.teamId) continue;
+            for (const auto& p : team->roster) TEST_ASSERT(p->jerseyNumber != retired.number, "Nobody wears a retired number");
+        }
+    }
+    g_testsPassed++;
+}
+
+void TestDraftClassFromFile() {
+    std::cout << "[TEST] Career: a draft class file replaces the made-up class...\n";
+    const std::string dir = std::filesystem::temp_directory_path().string() + "/bm_draft_test";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream f(dir + "/draft-2027.csv");
+        f << "first_name,last_name,position,birth_date,height,weight,current_ability,potential_ability\n";
+        for (int i = 0; i < 70; ++i) {
+            f << "Rookie" << i << ",Name" << i << "," << (i % 2 ? "PG" : "C") << ",2006-05-05,1.98,90," << 80 - i / 2 << ",95\n";
+        }
+    }
+    {
+        std::ofstream f(dir + "/bad.csv");
+        f << "first_name,last_name,position,current_ability\nA,B,XX,70\nC,D,PG,200\n";
+    }
+    auto league = CreateLeague(30, 21);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "2";
+    cfg.seed = 5;
+    career.Start(league, cfg);
+    TEST_ASSERT(career.Continue().kind == "draft_class", "The coach is asked about the draft class");
+
+    std::string message;
+    TEST_ASSERT(!career.LoadDraftClass(dir + "/bad.csv", &message), "A broken file is refused");
+    TEST_ASSERT(message.find("line 2") != std::string::npos && message.find("line 3") != std::string::npos, "Every problem is reported with its line");
+    TEST_ASSERT(!career.LoadDraftClass(dir + "/missing.csv", &message), "A missing file is refused");
+    TEST_ASSERT(career.Continue().kind == "draft_class", "The question stays open until it is answered");
+
+    TEST_ASSERT(career.LoadDraftClass(dir + "/draft-2027.csv", &message), "A valid file loads");
+    TEST_ASSERT(career.LoadedDraftClassSize() == 70 && career.DraftYear() == 2027, "Seventy prospects are loaded for the 2027 draft");
+    TEST_ASSERT(career.Continue().kind != "draft_class", "The question is answered");
+
+    career.Vacation("draft");
+    TEST_ASSERT(career.DraftReady() && career.DraftTotalPicks() == 60, "Two rounds of 30 picks");
+    career.DraftAutoFinish();
+    TEST_ASSERT(career.DraftResults().size() == 60, "Sixty players were drafted");
+    int fromFile = 0;
+    for (const auto& r : career.DraftResults()) if (r.playerName.rfind("Rookie", 0) == 0) ++fromFile;
+    TEST_ASSERT(fromFile == 60, "Every pick came from the file");
+    TEST_ASSERT(career.DraftResults().front().playerName.rfind("Rookie", 0) == 0, "The first pick is a player from the file");
+
+    // The next year asks again and falls back to a made-up class
+    career.Vacation("new_season");
+    TEST_ASSERT(career.SeasonYear() == 2027 && career.DraftYear() == 2028 && career.CurrentStop().kind == "draft_class", "The new season asks about its own class");
+    std::filesystem::remove_all(dir);
+    g_testsPassed++;
+}
+
 void TestProgressionFollowsAge() {
     std::cout << "[TEST] Career: young players improve and veterans decline over a year...\n";
     auto league = CreateLeague(30, 19);
@@ -894,6 +1034,26 @@ void TestCustomLeagueFiles() {
     auto again = bm::db::ImportLeagueFromCsv(base + "/export", base + "/again.db");
     TEST_ASSERT(again.ok && again.teams == 16 && again.players == 160, "An exported league imports again unchanged");
 
+    // Kit colours are optional, validated and reach the team list
+    {
+        const std::string colored = WriteLeagueCsv(base + "/colors", 16, 10, false);
+        std::ofstream t(colored + "/teams.csv");
+        t << "name,conference,away_color,third_color\n";
+        for (int i = 0; i < 16; ++i) t << "Club " << i + 1 << "," << (i < 8 ? "Eastern" : "Western") << (i == 0 ? ",#552583,#111111" : ",,") << "\n";
+        t.close();
+        auto ok = bm::db::ImportLeagueFromCsv(colored, base + "/colors.db");
+        TEST_ASSERT(ok.ok, "Teams without colours and teams with colours can share a file");
+        LoadDatabase((base + "/colors.db").c_str());
+        const std::string teamsJson = GetTeamsJson();
+        TEST_ASSERT(teamsJson.find("\"awayColor\":\"#552583\",\"thirdColor\":\"#111111\"") != std::string::npos, "The team list carries the kit colours");
+        std::ofstream broken(colored + "/teams.csv");
+        broken << "name,conference,away_color\n";
+        for (int i = 0; i < 16; ++i) broken << "Club " << i + 1 << "," << (i < 8 ? "Eastern" : "Western") << (i == 0 ? ",purple" : ",") << "\n";
+        broken.close();
+        auto rejected = bm::db::ImportLeagueFromCsv(colored, base + "/colors2.db");
+        TEST_ASSERT(!rejected.ok && rejected.errors.front().find("away_color") != std::string::npos, "A colour that is not #RRGGBB is rejected");
+    }
+
     // Mistakes are reported with their line
     auto bad = bm::db::ImportLeagueFromCsv(WriteLeagueCsv(base + "/bad", 16, 10, true), base + "/bad.db");
     TEST_ASSERT(!bad.ok && !bad.errors.empty(), "A broken file is rejected");
@@ -941,6 +1101,9 @@ int main() {
     TestCoachGameCanBePlayedLive();
     TestContractsAndFreeAgencyRules();
     TestDraftHasSixtyPicks();
+    TestDraftClassFromFile();
+    TestRetirementAndHallOfFame();
+    TestRandomLeagueAndSavedCareer();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

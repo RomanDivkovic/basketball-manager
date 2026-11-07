@@ -2,8 +2,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <random>
 #include <map>
+#include <numeric>
 #include <set>
 #include <sstream>
 
@@ -17,6 +20,7 @@ const char* kSchema =
     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, conference TEXT NOT NULL,"
     "prestige INTEGER DEFAULT 10, pace INTEGER DEFAULT 10, shooting INTEGER DEFAULT 10,"
     "defense INTEGER DEFAULT 10, rebounding INTEGER DEFAULT 10, ball_handling INTEGER DEFAULT 10,"
+    "away_color TEXT DEFAULT '', third_color TEXT DEFAULT '',"
     "active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);"
     "CREATE TABLE players ("
     "player_id TEXT PRIMARY KEY, first_name TEXT NOT NULL, last_name TEXT NOT NULL, team_id INTEGER,"
@@ -147,6 +151,11 @@ bool ParseDouble(const std::string& s, double& out) {
     return *end == '\0';
 }
 
+bool IsHexColor(const std::string& s) {
+    if (s.size() != 7 || s[0] != '#') return false;
+    return std::all_of(s.begin() + 1, s.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
+}
+
 std::string Quote(const std::string& s) {
     if (s.find_first_of(",\"\n\r") == std::string::npos) return s;
     std::string out = "\"";
@@ -195,7 +204,7 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
         return result;
     }
 
-    struct TeamRow { std::string name, conference; int prestige = 10, pace = 10, shooting = 10, defense = 10, rebounding = 10, ballHandling = 10; };
+    struct TeamRow { std::string name, conference, awayColor, thirdColor; int prestige = 10, pace = 10, shooting = 10, defense = 10, rebounding = 10, ballHandling = 10; };
     std::vector<TeamRow> teamRows;
     std::map<std::string, int> teamIndex;
     std::map<std::string, int> conferenceCount;
@@ -226,6 +235,15 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
         teamInt(r, "defense", 10, 0, 20, t.defense);
         teamInt(r, "rebounding", 10, 0, 20, t.rebounding);
         teamInt(r, "ball_handling", 10, 0, 20, t.ballHandling);
+        for (const char* column : {"away_color", "third_color"}) {
+            const std::string s = Cell(teams, r, ColumnOf(teams, column));
+            if (s.empty()) continue;
+            if (!IsHexColor(s)) {
+                fail("teams.csv line " + std::to_string(teams.lines[r]) + ": " + column + " must look like #1D1160");
+                continue;
+            }
+            (std::string(column) == "away_color" ? t.awayColor : t.thirdColor) = s;
+        }
         teamIndex[Lower(t.name)] = static_cast<int>(teamRows.size());
         ++conferenceCount[t.conference];
         teamRows.push_back(t);
@@ -329,7 +347,7 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
            && sqlite3_exec(db, kSchema, nullptr, nullptr, &message) == SQLITE_OK;
     if (ok) {
         sqlite3_stmt* st = nullptr;
-        sqlite3_prepare_v2(db, "INSERT INTO teams (name, conference, prestige, pace, shooting, defense, rebounding, ball_handling) VALUES (?,?,?,?,?,?,?,?)", -1, &st, nullptr);
+        sqlite3_prepare_v2(db, "INSERT INTO teams (name, conference, prestige, pace, shooting, defense, rebounding, ball_handling, away_color, third_color) VALUES (?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr);
         for (const auto& t : teamRows) {
             sqlite3_reset(st);
             sqlite3_bind_text(st, 1, t.name.c_str(), -1, SQLITE_TRANSIENT);
@@ -340,6 +358,8 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
             sqlite3_bind_int(st, 6, t.defense);
             sqlite3_bind_int(st, 7, t.rebounding);
             sqlite3_bind_int(st, 8, t.ballHandling);
+            sqlite3_bind_text(st, 9, t.awayColor.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 10, t.thirdColor.c_str(), -1, SQLITE_TRANSIENT);
             if (sqlite3_step(st) != SQLITE_DONE) ok = false;
         }
         sqlite3_finalize(st);
@@ -391,6 +411,212 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
     return result;
 }
 
+DraftClassResult ReadDraftClassCsv(const std::string& path) {
+    DraftClassResult result;
+    CsvTable table;
+    std::string error;
+    if (!ReadCsv(path, table, error)) {
+        result.errors.push_back(error);
+        return result;
+    }
+    for (const char* column : {"first_name", "last_name", "position", "current_ability"}) {
+        if (ColumnOf(table, column) < 0) result.errors.push_back(std::string("The file needs a column named ") + column);
+    }
+    if (!result.errors.empty()) return result;
+    if (table.rows.empty()) {
+        result.errors.push_back("The file has no prospects");
+        return result;
+    }
+    if (table.rows.size() > 300) {
+        result.errors.push_back("The file has " + std::to_string(table.rows.size()) + " prospects; the limit is 300");
+        return result;
+    }
+
+    static const std::set<std::string> kPositions = {"PG", "SG", "SF", "PF", "C"};
+    std::set<std::string> seen;
+    auto fail = [&](const std::string& text) {
+        if (result.errors.size() < 20) result.errors.push_back(text);
+    };
+    for (size_t r = 0; r < table.rows.size(); ++r) {
+        const std::string where = path.substr(path.find_last_of("/\\") == std::string::npos ? 0 : path.find_last_of("/\\") + 1)
+                                  + " line " + std::to_string(table.lines[r]) + ": ";
+        DraftProspectRow p;
+        p.first = Cell(table, r, ColumnOf(table, "first_name"));
+        p.last = Cell(table, r, ColumnOf(table, "last_name"));
+        if (p.first.empty() || p.last.empty()) { fail(where + "first_name and last_name are required"); continue; }
+        std::string position = Cell(table, r, ColumnOf(table, "position"));
+        std::transform(position.begin(), position.end(), position.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        if (!kPositions.count(position)) { fail(where + "position must be PG, SG, SF, PF or C"); continue; }
+        p.position = position;
+        if (!ParseInt(Cell(table, r, ColumnOf(table, "current_ability")), p.ability) || p.ability < 40 || p.ability > 99) {
+            fail(where + "current_ability must be a number from 40 to 99");
+            continue;
+        }
+        if (!seen.insert(Lower(p.first + " " + p.last)).second) { fail(where + "duplicate prospect " + p.first + " " + p.last); continue; }
+
+        bool bad = false;
+        auto optionalInt = [&](const char* column, int fallback, int lo, int hi, int& out) {
+            const std::string s = Cell(table, r, ColumnOf(table, column));
+            out = fallback;
+            if (s.empty()) return;
+            int v;
+            if (!ParseInt(s, v) || v < lo || v > hi) {
+                fail(where + column + " must be a number from " + std::to_string(lo) + " to " + std::to_string(hi));
+                bad = true;
+                return;
+            }
+            out = v;
+        };
+        optionalInt("potential_ability", std::min(99, p.ability + 8), 40, 99, p.potential);
+        p.potential = std::max(p.potential, p.ability);
+        optionalInt("pace", 0, 1, 20, p.pace);
+        optionalInt("shooting", 0, 1, 20, p.shooting);
+        optionalInt("ball_control", 0, 1, 20, p.ballControl);
+        optionalInt("defense", 0, 1, 20, p.defense);
+        optionalInt("physical", 0, 1, 20, p.physical);
+        optionalInt("technical", 0, 1, 20, p.technical);
+        const std::string birth = Cell(table, r, ColumnOf(table, "birth_date"));
+        if (!birth.empty()) {
+            int y = 0;
+            if (birth.size() < 4 || !ParseInt(birth.substr(0, 4), y) || y < 1980 || y > 2012) {
+                fail(where + "birth_date must start with a year from 1980 to 2012 (YYYY-MM-DD)");
+                bad = true;
+            } else {
+                p.birth = birth;
+            }
+        }
+        const std::string h = Cell(table, r, ColumnOf(table, "height"));
+        if (!h.empty() && (!ParseDouble(h, p.height) || p.height < 1.6 || p.height > 2.4)) { fail(where + "height is in metres, 1.6 to 2.4"); bad = true; }
+        const std::string w = Cell(table, r, ColumnOf(table, "weight"));
+        if (!w.empty() && (!ParseDouble(w, p.weight) || p.weight < 60 || p.weight > 180)) { fail(where + "weight is in kg, 60 to 180"); bad = true; }
+        if (!bad) result.prospects.push_back(p);
+    }
+    result.ok = result.errors.empty();
+    return result;
+}
+
+LeagueImportResult GenerateRandomLeague(const std::string& outDbPath, unsigned seed) {
+    static const char* kCities[] = {"Harbor City", "Ironvale", "Cedar Falls", "Northport", "Redwood Bay", "Stonebridge", "Lakemont",
+        "Sunridge", "Crestline", "Foxhollow", "Briarwood", "Ashford", "Westmere", "Silvergate", "Copperfield", "Highmark", "Pinecrest",
+        "Oakhaven", "Riverton", "Summit Ridge", "Marlowe", "Thornbury", "Eastvale", "Clearwater", "Dunmore", "Falconer", "Glenrock",
+        "Hartwell", "Kingsport", "Larkspur", "Maplewood", "Newhaven", "Orchard Hill", "Portwick", "Quarry Point", "Ravenmoor",
+        "Saltmarsh", "Tidewater", "Underhill", "Valemont", "Windmere", "Yarrow", "Zephyr Bay"};
+    static const char* kNicknames[] = {"Gulls", "Foxes", "Forgers", "Rangers", "Comets", "Herons", "Huskies", "Miners", "Titans",
+        "Voyagers", "Embers", "Stags", "Falcons", "Anchors", "Pioneers", "Ravens", "Sentinels", "Storm", "Vipers", "Wardens",
+        "Drifters", "Kestrels", "Mariners", "Bison", "Cougars", "Lynx", "Outlaws", "Pilots", "Raiders", "Spartans", "Badgers", "Otters"};
+    static const char* kFirst[] = {"Marcus", "Tyrese", "Jaylen", "Elijah", "Caleb", "Darius", "Isaiah", "Mateo", "Andre", "Kenji", "Luca",
+        "Noah", "Terrell", "Dante", "Rashad", "Jonas", "Emeka", "Silas", "Anton", "Bryce", "Cole", "Devin", "Gabriel", "Hakeem", "Ibrahim",
+        "Jamal", "Kaleb", "Lamar", "Malik", "Nico", "Omar", "Quincy", "Reggie", "Soren", "Tobias", "Vince", "Wesley", "Xavier", "Yusuf",
+        "Zane", "Aiden", "Bastian", "Cyrus", "Damon", "Eli", "Felix", "Grant", "Hugo", "Ivan", "Jules", "Kai", "Leon", "Milo", "Nolan",
+        "Owen", "Pablo", "Rafael", "Sami", "Theo", "Viktor"};
+    static const char* kLast[] = {"Holloway", "Brantley", "Okafor", "Villanueva", "Strand", "Delacroix", "Whitfield", "Nakamura",
+        "Petrovic", "Abara", "Lindqvist", "Montague", "Ferreira", "Castellano", "Oyelaran", "Haldane", "Kowalczyk", "Ramsey",
+        "Thibodeaux", "Adeyemi", "Sorensen", "Maddox", "Fontaine", "Gutierrez", "Hargrove", "Ivanov", "Jorgensen", "Kimura", "Laurent",
+        "Mbeki", "Novak", "Okonkwo", "Pearce", "Quintero", "Rasmussen", "Sandoval", "Tremblay", "Underhill", "Vasquez", "Winslow",
+        "Yamada", "Zielinski", "Ashworth", "Bellamy", "Carrow", "Dunmore", "Eriksen", "Fairbanks", "Galloway", "Hendricks", "Ibarra",
+        "Jernigan", "Kessel", "Lockhart", "Mercer", "Navarro", "Osei", "Prescott", "Quade", "Rourke", "Salazar", "Tennant", "Ulloa",
+        "Vandermeer", "Whitlock", "Xiong", "Yilmaz", "Zamora", "Alder", "Brightwell", "Cormier", "Dalgaard", "Everhart", "Fitzroy",
+        "Greaves", "Halloran", "Ingram", "Jovanovic", "Kowal", "Lemaire", "Morrow", "Nyberg", "Oduya", "Pellegrini", "Rinaldi",
+        "Santoro", "Teague", "Valdez", "Wexler", "Yoder", "Zimmer"};
+    constexpr int kTeams = 30;
+    constexpr int kRoster = 15;
+    std::mt19937 rng(seed ? seed : 1u);
+    auto pick = [&](int n) { return static_cast<int>(rng() % static_cast<unsigned>(n)); };
+    std::normal_distribution<double> gauss(0.0, 1.0);
+
+    std::vector<std::string> cities(std::begin(kCities), std::end(kCities));
+    std::vector<std::string> nicknames(std::begin(kNicknames), std::end(kNicknames));
+    std::shuffle(cities.begin(), cities.end(), rng);
+    std::shuffle(nicknames.begin(), nicknames.end(), rng);
+
+    const std::filesystem::path folder = std::filesystem::path(outDbPath + "_source");
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+    std::filesystem::create_directories(folder, ec);
+    std::ofstream teamsOut(folder / "teams.csv");
+    std::ofstream playersOut(folder / "players.csv");
+    if (!teamsOut || !playersOut) {
+        LeagueImportResult failed;
+        failed.errors.push_back("Could not write the league files next to " + outDbPath);
+        return failed;
+    }
+    teamsOut << "name,conference,prestige,pace,shooting,defense,rebounding,ball_handling,away_color,third_color\n";
+    playersOut << "team,first_name,last_name,position,jersey_number,birth_date,height,weight,pace,shooting,ball_control,defense,physical,technical,current_ability,potential_ability\n";
+
+    struct Strength { int index; double value; };
+    std::vector<std::string> names;
+    std::vector<double> strength;
+    for (int t = 0; t < kTeams; ++t) {
+        names.push_back(cities[t] + " " + nicknames[t]);
+        strength.push_back(std::clamp(gauss(rng) * 2.5, -5.0, 5.0));
+    }
+    std::vector<int> order(kTeams);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return strength[a] > strength[b]; });
+    std::vector<int> rank(kTeams);
+    for (int r = 0; r < kTeams; ++r) rank[order[r]] = r;
+    std::vector<int> conferenceOf(kTeams);
+    {
+        std::vector<int> shuffled(kTeams);
+        std::iota(shuffled.begin(), shuffled.end(), 0);
+        std::shuffle(shuffled.begin(), shuffled.end(), rng);
+        for (int i = 0; i < kTeams; ++i) conferenceOf[shuffled[i]] = i < kTeams / 2 ? 0 : 1;
+    }
+
+    std::set<std::string> usedNames;
+    static const char* kPositions[] = {"PG", "SG", "SF", "PF", "C"};
+    static const double kHeight[] = {1.88, 1.96, 2.03, 2.08, 2.13};
+    static const double kWeight[] = {84, 91, 98, 105, 113};
+    // pace, shooting, ball control, defense, physical, technical
+    static const int kShape[5][6] = {{1, 0, 2, -1, -2, 1}, {1, 2, 0, 0, -1, 0}, {0, 1, 0, 0, 0, 0}, {-1, 0, -1, 1, 2, 0}, {-2, -2, -2, 2, 3, 0}};
+    std::vector<int> starSlots;
+    for (int i = 0; i < 12; ++i) starSlots.push_back(pick(kTeams));
+
+    for (int t = 0; t < kTeams; ++t) {
+        const double hue = std::fmod(t * (360.0 / kTeams) + pick(9), 360.0) / 60.0;
+        const int sector = static_cast<int>(hue) % 6;
+        const double f = hue - std::floor(hue);
+        const double v = 0.72;
+        const double s = 0.80;
+        const double p = v * (1 - s), q = v * (1 - s * f), u = v * (1 - s * (1 - f));
+        const double rgb[6][3] = {{v, u, p}, {q, v, p}, {p, v, u}, {p, q, v}, {u, p, v}, {v, p, q}};
+        char away[8];
+        std::snprintf(away, sizeof(away), "#%02X%02X%02X", static_cast<int>(rgb[sector][0] * 255), static_cast<int>(rgb[sector][1] * 255), static_cast<int>(rgb[sector][2] * 255));
+        teamsOut << names[t] << "," << (conferenceOf[t] == 0 ? "Eastern" : "Western") << "," << std::clamp(20 - rank[t] * 12 / (kTeams - 1), 8, 20)
+                 << "," << 9 + pick(8) << "," << 9 + pick(8) << "," << 9 + pick(8) << "," << 9 + pick(8) << "," << 9 + pick(8) << "," << away << ",#111111\n";
+
+        std::set<int> jerseys;
+        for (int k = 0; k < kRoster; ++k) {
+            double rating = 87.5 - 2.1 * k + strength[t] + gauss(rng) * 2.5;
+            if (k == 0 && std::count(starSlots.begin(), starSlots.end(), t)) rating += 3 + pick(4);
+            const int ability = static_cast<int>(std::lround(std::clamp(rating, 64.0, 96.0)));
+            std::string first, last;
+            do { first = kFirst[pick(static_cast<int>(sizeof(kFirst) / sizeof(*kFirst)))]; last = kLast[pick(static_cast<int>(sizeof(kLast) / sizeof(*kLast)))]; }
+            while (!usedNames.insert(first + " " + last).second);
+            const int pos = (k + pick(2)) % 5;
+            int age = static_cast<int>(std::lround(26.0 + gauss(rng) * 4.0 + (k > 9 ? -1.0 : 0.0)));
+            age = std::clamp(age, 19, 37);
+            const int potential = std::clamp(ability + std::max(0, static_cast<int>(std::lround((27 - age) * 1.8 + gauss(rng) * 2.0))), ability, 99);
+            int jersey;
+            do { jersey = pick(56); } while (!jerseys.insert(jersey).second);
+            char birth[16];
+            std::snprintf(birth, sizeof(birth), "%d-%02d-%02d", 2026 - age, 1 + pick(12), 1 + pick(28));
+            char body[32];
+            std::snprintf(body, sizeof(body), "%.2f,%d", kHeight[pos] + gauss(rng) * 0.04, static_cast<int>(kWeight[pos] + gauss(rng) * 5.0));
+            playersOut << names[t] << "," << first << "," << last << "," << kPositions[pos] << "," << jersey << "," << birth << "," << body;
+            for (int a = 0; a < 6; ++a) {
+                playersOut << "," << std::clamp(static_cast<int>(std::lround(ability / 5.0 + kShape[pos][a] + gauss(rng) * 1.2)), 3, 20);
+            }
+            playersOut << "," << ability << "," << potential << "\n";
+        }
+    }
+    teamsOut.close();
+    playersOut.close();
+    LeagueImportResult result = ImportLeagueFromCsv(folder.string(), outDbPath);
+    std::filesystem::remove_all(folder, ec);
+    return result;
+}
+
 bool ExportLeagueTemplate(sqlite3* source, const std::string& folder, std::string* error) {
     auto say = [&](const std::string& text) { if (error) *error = text; };
     if (!source) { say("No league is loaded"); return false; }
@@ -401,13 +627,22 @@ bool ExportLeagueTemplate(sqlite3* source, const std::string& folder, std::strin
     std::ofstream readme(folder + sep + "README.txt", std::ios::binary);
     if (!teamsOut || !playersOut || !readme) { say("Could not write into " + folder); return false; }
 
-    teamsOut << "name,conference,prestige,pace,shooting,defense,rebounding,ball_handling\n";
+    teamsOut << "name,conference,prestige,pace,shooting,defense,rebounding,ball_handling,away_color,third_color\n";
+    bool hasColors = false;
+    {
+        sqlite3_stmt* info = nullptr;
+        sqlite3_prepare_v2(source, "PRAGMA table_info(teams)", -1, &info, nullptr);
+        while (info && sqlite3_step(info) == SQLITE_ROW) if (Text(info, 1) == "away_color") hasColors = true;
+        sqlite3_finalize(info);
+    }
     sqlite3_stmt* st = nullptr;
-    sqlite3_prepare_v2(source, "SELECT name, conference, prestige, pace, shooting, defense, rebounding, ball_handling FROM teams ORDER BY id", -1, &st, nullptr);
+    sqlite3_prepare_v2(source, hasColors
+        ? "SELECT name, conference, prestige, pace, shooting, defense, rebounding, ball_handling, away_color, third_color FROM teams ORDER BY id"
+        : "SELECT name, conference, prestige, pace, shooting, defense, rebounding, ball_handling, '', '' FROM teams ORDER BY id", -1, &st, nullptr);
     while (st && sqlite3_step(st) == SQLITE_ROW) {
         teamsOut << Quote(Text(st, 0)) << "," << Text(st, 1);
         for (int c = 2; c <= 7; ++c) teamsOut << "," << sqlite3_column_int(st, c);
-        teamsOut << "\n";
+        teamsOut << "," << Text(st, 8) << "," << Text(st, 9) << "\n";
     }
     sqlite3_finalize(st);
 
@@ -433,7 +668,9 @@ bool ExportLeagueTemplate(sqlite3* source, const std::string& folder, std::strin
         "teams.csv (required: name, conference)\n"
         "  name           unique team name\n"
         "  conference     Eastern or Western (at least 8 teams in each, 16 to 40 teams in total)\n"
-        "  prestige, pace, shooting, defense, rebounding, ball_handling   0 to 20 (optional, default 10)\n\n"
+        "  prestige, pace, shooting, defense, rebounding, ball_handling   0 to 20 (optional, default 10)\n"
+        "  away_color, third_color   kit colours like #1D1160 (optional). Home kits are always white; the away kit uses away_color,\n"
+        "                            the third kit third_color (black unless the away kit is black).\n\n"
         "players.csv (required: team, first_name, last_name, position, current_ability)\n"
         "  team                  must match a name in teams.csv (8 to 20 players per team)\n"
         "  position              PG, SG, SF, PF or C\n"
