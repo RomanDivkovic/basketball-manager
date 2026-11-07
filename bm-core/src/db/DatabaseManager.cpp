@@ -159,6 +159,8 @@ void DatabaseManager::CreateTeamTable() {
             defense INTEGER DEFAULT 10,
             rebounding INTEGER DEFAULT 10,
             ball_handling INTEGER DEFAULT 10,
+            away_color TEXT DEFAULT '',
+            third_color TEXT DEFAULT '',
             active INTEGER DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );

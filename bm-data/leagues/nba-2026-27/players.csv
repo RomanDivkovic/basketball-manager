@@ -1,0 +1,451 @@
+team,first_name,last_name,position,jersey_number,birth_date,height,weight,pace,shooting,ball_control,defense,physical,technical,current_ability,potential_ability
+Atlanta Hawks,Jalen,Johnson,PF,1,2001-12-18,2.03,99,18,19,20,19,20,20,88,91
+Atlanta Hawks,Nickeil,Alexander-Walker,SG,7,1998-09-02,1.96,93,17,20,17,17,15,16,80,80
+Atlanta Hawks,Onyeka,Okongwu,PF,17,2000-12-11,2.08,109,16,17,16,18,18,16,79,82
+Atlanta Hawks,CJ,McCollum,PG,3,1991-09-19,1.91,86,15,17,17,16,14,16,79,79
+Atlanta Hawks,Dyson,Daniels,PG,5,2003-03-17,2.01,90,17,10,19,17,16,18,78,85
+Atlanta Hawks,Jock,Landale,C,31,1995-10-25,2.11,116,14,14,14,15,17,15,75,75
+Atlanta Hawks,Zuby,Ejiofor,PF,20,2004-04-20,2.03,111,14,13,12,14,12,13,72,79
+Atlanta Hawks,Kingston,Flemings,PG,4,2007-01-03,1.91,83,16,13,13,13,10,13,72,83
+Atlanta Hawks,Henri,Veesaar,C,13,2004-03-28,2.13,103,13,13,12,14,11,13,72,79
+Atlanta Hawks,Aaron,Wiggins,SG,2,1999-01-02,1.96,86,15,14,13,14,12,13,70,70
+Atlanta Hawks,Corey,Kispert,SF,24,1999-03-03,1.98,102,14,15,13,13,12,14,70,70
+Atlanta Hawks,Asa,Newell,PF,14,2005-10-05,2.11,102,14,12,12,14,12,13,70,81
+Atlanta Hawks,RayJ,Dennis,PG,10,2001-03-30,1.88,82,15,14,14,13,10,13,69,72
+Atlanta Hawks,Mouhamed,Gueye,PF,18,2002-11-09,2.11,95,14,11,12,14,12,13,68,75
+Atlanta Hawks,Luguentz,Dort,SG,0,1999-04-19,1.93,100,14,13,12,13,12,12,66,66
+Boston Celtics,Derrick,White,PG,9,1994-07-02,1.93,91,17,18,19,17,15,18,80,80
+Boston Celtics,Neemias,Queta,C,88,1999-07-13,2.13,118,15,15,15,18,19,15,80,80
+Boston Celtics,Paul,George,PF,13,1990-05-02,2.03,100,14,18,16,18,16,16,80,80
+Boston Celtics,Payton,Pritchard,PG,11,1998-01-28,1.88,96,17,19,18,15,15,18,79,79
+Boston Celtics,Mitchell,Robinson,C,4,1998-04-01,2.13,109,14,10,14,17,19,14,78,78
+Boston Celtics,Jayson,Tatum,PF,0,1998-03-03,2.03,102,16,17,18,17,19,17,78,78
+Boston Celtics,Luka,Garza,C,52,1998-12-27,2.08,110,14,17,13,15,15,14,76,76
+Boston Celtics,Devin,Carter,PG,99,2002-03-18,1.88,85,16,12,15,14,12,14,72,75
+Boston Celtics,Sam,Hauser,PF,30,1997-12-08,2.03,100,14,16,13,14,13,14,70,70
+Boston Celtics,Ron,Harper Jr.,SG,8,2000-04-12,1.96,106,15,13,12,13,12,14,70,73
+Boston Celtics,Jordan,Walsh,SG,27,2004-03-03,2.01,94,15,14,12,14,13,13,69,76
+Boston Celtics,Baylor,Scheierman,SG,55,2000-09-26,1.98,97,15,16,12,13,12,13,68,71
+Boston Celtics,Hugo,Gonzalez,SG,28,2006-02-05,1.98,93,14,10,11,13,12,12,66,77
+Boston Celtics,Mike,Conley,PG,45,1987-10-11,1.85,79,11,14,14,13,10,15,66,66
+Boston Celtics,Amari,Williams,PF,77,2002-01-28,2.13,119,13,11,11,13,13,12,66,69
+Brooklyn Nets,Michael,Porter Jr.,PF,17,1998-06-29,2.08,99,17,20,17,18,18,17,85,85
+Brooklyn Nets,Julius,Randle,PF,30,1994-11-29,2.06,113,17,17,18,17,19,17,83,83
+Brooklyn Nets,Day'Ron,Sharpe,C,20,2001-11-06,2.08,120,15,14,15,17,18,15,79,82
+Brooklyn Nets,Josh,Minott,PF,00,2002-11-25,2.03,93,14,16,13,15,13,13,72,79
+Brooklyn Nets,Chaney,Johnson,PF,31,2002-06-20,2.03,102,14,13,14,15,14,14,72,75
+Brooklyn Nets,Tyler,Bilodeau,PF,34,2004-04-17,2.03,103,14,13,12,14,11,13,72,79
+Brooklyn Nets,Mikel,Brown Jr.,SG,0,2006-04-03,1.96,82,16,13,12,13,10,13,72,83
+Brooklyn Nets,Joshua,Jefferson,PF,9,2003-11-21,2.03,112,14,13,12,14,12,13,72,79
+Brooklyn Nets,Noah,Clowney,PF,21,2004-07-14,2.08,95,14,14,13,15,13,13,71,78
+Brooklyn Nets,Egor,Demin,SG,8,2006-03-03,2.03,91,15,16,14,14,12,14,71,82
+Brooklyn Nets,Danny,Wolf,PF,2,2004-05-05,2.11,113,14,14,14,15,15,14,71,78
+Brooklyn Nets,Moritz,Wagner,C,13,1997-04-26,2.11,111,13,14,12,14,14,13,71,71
+Brooklyn Nets,Terance,Mann,SG,14,1996-10-18,1.98,98,15,14,14,13,12,14,68,68
+Brooklyn Nets,Keon,Ellis,SG,1,2000-01-08,1.93,79,15,13,12,14,10,13,68,71
+Brooklyn Nets,Nolan,Traore,PG,10,2006-05-28,1.91,84,15,13,15,13,10,14,67,78
+Charlotte Hornets,Brandon,Miller,SF,24,2002-11-22,2.01,91,16,19,16,16,15,16,80,87
+Charlotte Hornets,Kon,Knueppel,SG,7,2005-08-03,1.98,98,17,20,16,15,16,16,79,90
+Charlotte Hornets,Grayson,Allen,PG,8,1995-10-08,1.91,90,17,17,17,16,14,16,78,78
+Charlotte Hornets,Coby,White,SG,3,2000-02-16,1.93,88,17,17,16,15,14,16,78,81
+Charlotte Hornets,Naz,Reid,C,0,1999-08-26,2.06,120,14,16,15,17,18,15,77,77
+Charlotte Hornets,Moussa,Diabate,PF,14,2002-01-21,2.08,95,15,13,14,16,17,15,76,79
+Charlotte Hornets,Ryan,Kalkbrenner,C,11,2002-01-17,2.16,116,14,14,13,16,16,14,75,78
+Charlotte Hornets,Dennis,Schroder,PG,17,1993-09-15,1.85,79,15,15,17,14,12,16,73,73
+Charlotte Hornets,Christian,Anderson,PG,5,2006-04-02,1.85,82,16,13,13,13,10,13,72,83
+Charlotte Hornets,Kylan,Boswell,PG,18,2005-04-18,1.85,103,16,13,13,13,11,13,72,83
+Charlotte Hornets,Hannes,Steinbach,PF,22,2006-05-01,2.08,112,14,13,12,14,12,13,72,83
+Charlotte Hornets,Royce,O'Neale,SF,00,1993-06-05,1.98,103,13,15,14,14,14,14,71,71
+Charlotte Hornets,PJ,Hall,C,16,2002-02-21,2.03,111,13,14,12,14,14,13,71,74
+Charlotte Hornets,Grant,Williams,SF,2,1998-11-30,2.01,107,14,15,13,14,14,13,70,70
+Charlotte Hornets,Tidjane,Salaun,PF,31,2005-08-10,2.08,94,14,14,12,14,13,13,70,81
+Chicago Bulls,Josh,Giddey,PG,3,2002-10-10,2.01,98,18,18,20,17,19,20,84,87
+Chicago Bulls,Norman,Powell,SG,24,1993-05-25,1.93,98,17,19,16,16,15,16,81,81
+Chicago Bulls,Tre,Jones,PG,30,2000-01-08,1.85,84,17,16,19,16,14,18,80,83
+Chicago Bulls,Nic,Claxton,C,9,1999-04-17,2.11,98,15,14,16,17,17,16,79,79
+Chicago Bulls,Matas,Buzelis,PF,14,2004-10-13,2.03,95,15,16,15,17,16,15,77,84
+Chicago Bulls,Jalen,Smith,PF,25,2000-03-16,2.03,98,15,15,14,16,16,14,75,78
+Chicago Bulls,Leonard,Miller,PF,11,2003-11-26,2.08,100,14,13,13,14,14,13,72,79
+Chicago Bulls,Zach,Collins,PF,12,1997-11-19,2.06,113,14,16,13,14,16,14,72,72
+Chicago Bulls,Noa,Essengue,PF,2,2006-12-18,2.11,93,14,13,12,14,11,12,72,83
+Chicago Bulls,Tobe,Awaka,PF,19,2004-01-30,2.03,116,14,13,12,14,12,13,72,79
+Chicago Bulls,Dailyn,Swain,SG,5,2005-07-15,2.01,96,16,13,12,13,11,13,72,83
+Chicago Bulls,Caleb,Wilson,PF,8,2006-07-18,2.06,96,14,13,12,14,11,13,72,83
+Chicago Bulls,Buddy,Hield,SG,7,1992-12-17,1.93,100,14,14,13,14,12,13,70,70
+Chicago Bulls,Isaac,Okoro,SF,35,2001-01-26,1.93,102,14,13,12,13,12,13,68,71
+Chicago Bulls,Patrick,Williams,SF,44,2001-08-26,1.98,98,13,12,12,13,12,12,66,69
+Cleveland Cavaliers,Donovan,Mitchell,PG,45,1996-09-07,1.88,98,19,20,20,19,18,19,90,90
+Cleveland Cavaliers,James,Harden,PG,1,1989-08-26,1.96,100,16,20,20,18,17,20,87,87
+Cleveland Cavaliers,Evan,Mobley,C,4,2001-06-18,2.11,98,16,14,17,19,19,17,84,87
+Cleveland Cavaliers,Jarrett,Allen,C,31,1998-04-21,2.06,110,15,16,16,18,20,16,83,83
+Cleveland Cavaliers,Peyton,Watson,SG,8,2002-09-11,2.03,91,16,17,14,16,14,15,76,79
+Cleveland Cavaliers,Jaylon,Tyson,SG,20,2002-12-02,1.98,98,16,17,14,15,15,15,75,82
+Cleveland Cavaliers,Sam,Merrill,SG,5,1996-05-15,1.93,93,16,18,14,14,13,15,73,73
+Cleveland Cavaliers,Thomas,Bryant,C,3,1997-07-31,2.06,112,13,15,12,14,14,13,72,72
+Cleveland Cavaliers,Meleek,Thomas,PG,15,2006-08-06,1.91,86,16,13,13,13,10,13,72,83
+Cleveland Cavaliers,Ernest,Udeh Jr.,C,88,2004-01-08,2.06,121,13,13,12,14,13,13,72,79
+Cleveland Cavaliers,Craig,Porter Jr.,PG,9,2000-02-26,1.85,82,15,11,15,14,12,15,71,74
+Cleveland Cavaliers,Tyrese,Proctor,SG,24,2004-04-01,1.93,84,15,15,13,13,10,13,69,76
+Cleveland Cavaliers,Tristan,Enaruna,PF,21,2001-06-26,2.03,100,13,12,11,13,11,13,66,69
+Cleveland Cavaliers,Norchad,Omier,C,15,2001-08-28,2.01,112,12,15,11,13,12,11,66,69
+Cleveland Cavaliers,Mario,Hezonja,PF,33,1995-02-25,2.03,100,13,11,11,12,10,12,66,66
+Dallas Mavericks,Cooper,Flagg,PF,32,2006-12-21,2.06,93,17,17,18,18,17,17,83,94
+Dallas Mavericks,Santi,Aldama,PF,34,2001-01-10,2.13,98,16,15,16,17,17,16,78,81
+Dallas Mavericks,Daniel,Gafford,PF,21,1998-10-01,2.08,120,16,14,14,17,18,14,78,78
+Dallas Mavericks,Naji,Marshall,SF,3,1998-01-24,1.98,100,15,14,16,15,15,16,77,77
+Dallas Mavericks,P.J.,Washington,PF,25,1998-08-23,2.01,104,15,14,14,17,17,14,75,75
+Dallas Mavericks,Dereck,Lively II,C,2,2004-02-12,2.16,104,13,14,13,16,15,14,72,79
+Dallas Mavericks,Sergio,de Larrea,SF,55,2005-12-04,2.01,92,14,13,12,13,11,13,72,83
+Dallas Mavericks,Morez,Johnson Jr.,PF,14,2006-01-25,2.06,113,14,13,12,14,12,13,72,83
+Dallas Mavericks,Moussa,Cisse,C,30,2002-09-10,2.11,100,13,10,12,15,15,12,71,74
+Dallas Mavericks,Max,Christie,SG,0,2003-02-10,1.96,86,15,17,13,14,12,13,70,77
+Dallas Mavericks,Zaccharie,Risacher,PF,10,2005-04-08,2.03,91,14,13,12,15,13,13,70,81
+Dallas Mavericks,Walter,Clayton Jr.,SG,1,2003-03-06,1.93,88,15,14,15,13,11,15,69,76
+Dallas Mavericks,Marcus,Sasser,PG,8,2000-09-21,1.85,88,15,16,14,13,10,14,69,72
+Dallas Mavericks,Jett,Howard,SG,9,2003-09-14,2.03,98,15,16,12,12,11,13,68,75
+Dallas Mavericks,Caleb,Martin,SF,16,1995-09-28,1.96,93,13,10,12,13,11,13,66,66
+Denver Nuggets,Nikola,Jokic,C,15,1995-02-19,2.11,129,18,20,20,20,20,20,98,98
+Denver Nuggets,Jamal,Murray,PG,27,1997-02-23,1.93,98,19,20,20,18,17,20,88,88
+Denver Nuggets,DeMar,DeRozan,SG,10,1989-08-07,1.98,100,15,17,17,16,15,17,80,80
+Denver Nuggets,Aaron,Gordon,PF,32,1995-09-16,2.03,107,16,17,16,16,17,16,79,79
+Denver Nuggets,Marvin,Bagley III,PF,3,1999-03-14,2.08,107,16,14,14,16,17,15,78,78
+Denver Nuggets,Christian,Braun,SG,0,2001-04-17,1.98,100,16,14,14,14,14,15,73,76
+Denver Nuggets,Cameron,Johnson,PF,23,1996-03-03,2.03,95,14,18,14,15,13,15,72,72
+Denver Nuggets,Cam,Whitmore,SF,00,2004-07-08,1.98,104,14,12,12,14,13,13,71,78
+Denver Nuggets,DaRon,Holmes II,PF,14,2002-08-15,2.06,102,14,16,12,13,12,13,70,73
+Denver Nuggets,Ryan,Nembhard,PG,9,2003-03-10,1.80,82,15,14,16,13,11,16,69,76
+Denver Nuggets,Julian,Strawther,SG,1,2002-04-18,1.98,93,15,15,12,13,11,13,69,72
+Denver Nuggets,Zeke,Nnaji,PF,22,2001-01-09,2.08,109,14,13,12,14,13,12,68,71
+Denver Nuggets,Spencer,Jones,SF,21,2001-06-14,2.01,102,13,12,11,13,12,12,66,69
+Denver Nuggets,Trevon,Brazile,PF,7,2003-01-07,2.08,100,13,11,11,12,10,12,66,73
+Denver Nuggets,Alpha,Diallo,SF,11,1997-06-29,2.01,95,13,11,11,12,10,12,66,66
+Detroit Pistons,Cade,Cunningham,PG,2,2001-09-25,1.98,100,19,20,20,19,18,20,90,93
+Detroit Pistons,Jalen,Duren,C,0,2003-11-18,2.08,113,17,18,17,19,20,17,89,96
+Detroit Pistons,Paul,Reed,PF,7,1999-06-14,2.06,95,16,14,14,17,15,15,79,79
+Detroit Pistons,Ausar,Thompson,SG,9,2003-01-30,2.01,93,17,12,16,17,15,16,77,84
+Detroit Pistons,John,Collins,PF,20,1997-09-23,2.06,103,15,17,14,16,16,14,76,76
+Detroit Pistons,Isaiah,Joe,SG,17,1999-07-02,1.93,75,16,18,13,14,11,14,73,73
+Detroit Pistons,Kevin,Huerter,SG,27,1998-08-27,1.98,90,16,13,14,14,13,15,72,72
+Detroit Pistons,Daniss,Jenkins,SG,24,2001-08-17,1.93,75,16,16,15,14,11,15,72,75
+Detroit Pistons,Ebuka,Okorie,PG,23,2007-04-10,1.88,84,16,13,13,13,10,13,72,83
+Detroit Pistons,Ugonna,Onyenso,C,34,2004-09-25,2.13,107,13,13,12,14,12,13,72,79
+Detroit Pistons,Duncan,Robinson,SF,55,1994-04-22,2.01,98,14,16,13,14,13,14,71,71
+Detroit Pistons,Javonte,Green,SG,31,1993-07-23,1.96,93,15,16,12,15,12,13,71,71
+Detroit Pistons,Ronald,Holland II,PF,5,2005-07-07,2.03,93,14,12,13,15,13,13,70,81
+Detroit Pistons,Taurean,Prince,SF,12,1994-03-22,1.98,99,14,19,13,13,13,13,70,70
+Detroit Pistons,Elijah,Harkless,PG,94,2000-02-03,1.91,88,15,11,15,14,11,14,69,72
+Golden State Warriors,Stephen,Curry,PG,30,1988-03-14,1.88,84,16,20,20,18,16,18,88,88
+Golden State Warriors,Jimmy,Butler III,SF,10,1989-09-14,1.98,104,15,20,19,18,18,19,87,87
+Golden State Warriors,Kristaps,Porzingis,C,7,1995-08-02,2.18,109,14,17,15,17,16,16,78,78
+Golden State Warriors,Brandon,Williams,PG,12,1999-11-22,1.85,86,17,13,17,15,13,16,77,80
+Golden State Warriors,Brandin,Podziemski,SG,2,2003-02-25,1.93,93,16,16,16,15,15,16,76,83
+Golden State Warriors,Gary,Payton II,PG,0,1992-12-01,1.88,88,15,12,15,15,13,15,75,75
+Golden State Warriors,De'Anthony,Melton,PG,8,1998-05-28,1.88,91,16,14,15,16,13,14,74,74
+Golden State Warriors,Moses,Moody,SG,4,2002-05-31,1.96,96,16,16,13,15,13,14,73,76
+Golden State Warriors,Gui,Santos,SF,15,2002-06-22,2.01,84,15,14,14,14,13,14,73,76
+Golden State Warriors,Al,Horford,C,20,1986-06-03,2.03,109,10,16,14,16,15,15,73,73
+Golden State Warriors,Charles,Bassey,C,28,2000-10-28,2.08,104,13,13,12,15,14,13,72,75
+Golden State Warriors,Draymond,Green,SF,23,1990-03-04,1.98,104,12,13,16,14,15,15,71,71
+Golden State Warriors,LJ,Cryer,PG,18,2001-10-09,1.83,91,15,17,13,13,11,13,70,73
+Golden State Warriors,Malevy,Leons,PF,33,1999-09-23,2.06,92,14,13,12,14,12,13,70,70
+Golden State Warriors,Will,Richard,PG,3,2002-12-24,1.91,93,15,14,13,14,12,13,68,75
+Houston Rockets,Kevin,Durant,PF,7,1988-09-29,2.11,109,15,20,19,19,18,18,87,87
+Houston Rockets,Alperen,Sengun,C,28,2002-07-25,2.11,110,16,16,20,19,20,19,87,90
+Houston Rockets,Amen,Thompson,PG,1,2003-01-30,2.01,91,18,17,20,18,18,18,84,91
+Houston Rockets,Reed,Sheppard,PG,15,2004-06-24,1.88,84,17,17,17,16,13,16,77,84
+Houston Rockets,Jabari,Smith Jr.,PF,10,2003-05-13,2.11,100,15,16,14,16,16,14,75,82
+Houston Rockets,Clint,Capela,C,30,1994-05-18,2.08,116,13,11,13,15,15,13,73,73
+Houston Rockets,Steven,Adams,C,12,1993-07-20,2.11,120,13,11,13,15,18,14,73,73
+Houston Rockets,Oscar,Tshiebwe,C,9,1999-11-27,2.03,116,13,11,13,15,17,14,73,76
+Houston Rockets,Tari,Eason,PF,17,2001-05-10,2.03,98,14,15,13,16,15,13,72,75
+Houston Rockets,Marcus,Smart,PG,36,1994-03-06,1.91,100,15,14,15,14,12,14,69,69
+Houston Rockets,Bogdan,Bogdanovic,SG,31,1992-08-18,1.96,102,14,14,13,13,12,14,69,69
+Houston Rockets,Jae'Sean,Tate,SF,8,1995-10-28,1.93,104,14,11,12,12,12,13,69,69
+Houston Rockets,Julian,Phillips,SF,3,2003-11-05,1.98,90,14,13,11,13,10,12,68,75
+Houston Rockets,Isaiah,Crawford,SF,27,2001-11-01,1.98,100,13,13,11,12,11,12,66,69
+Houston Rockets,Quadir,Copeland,SG,25,2003-09-01,1.98,100,14,11,11,12,10,12,66,73
+Indiana Pacers,Pascal,Siakam,PF,43,1994-04-02,2.03,111,16,17,17,18,19,17,84,84
+Indiana Pacers,Ivica,Zubac,C,40,1997-03-18,2.13,109,15,15,15,17,20,15,80,80
+Indiana Pacers,Andrew,Nembhard,PG,2,2000-01-16,1.93,87,17,17,20,15,14,18,79,82
+Indiana Pacers,T.J.,McConnell,PG,9,1992-03-25,1.85,86,16,16,18,15,13,18,78,78
+Indiana Pacers,Jay,Huff,C,32,1997-08-25,2.16,109,14,15,14,17,15,14,74,74
+Indiana Pacers,Kelly,Oubre Jr.,SG,10,1995-12-09,2.03,92,16,15,14,15,14,14,74,74
+Indiana Pacers,Obi,Toppin,PF,1,1998-03-04,2.06,100,15,17,14,15,14,15,74,74
+Indiana Pacers,Jarace,Walker,SF,5,2003-09-04,2.01,107,14,15,14,14,15,14,72,79
+Indiana Pacers,Quenton,Jackson,SG,29,1998-09-15,1.93,78,16,15,14,14,11,15,72,72
+Indiana Pacers,Aaron,Nesmith,SG,23,1999-10-16,1.96,98,15,16,13,14,14,14,71,71
+Indiana Pacers,Jalen,Slawson,SF,18,1999-10-22,2.01,98,14,14,14,16,14,14,71,71
+Indiana Pacers,Kobe,Brown,SG,24,2000-01-01,2.01,113,15,14,12,13,13,13,68,71
+Indiana Pacers,Johnny,Furphy,SG,12,2004-12-07,2.03,91,15,9,12,13,13,13,68,79
+Indiana Pacers,Larry,Nance Jr.,SF,22,1993-01-01,1.98,111,13,9,12,13,13,13,68,68
+Indiana Pacers,Ben,Sheppard,SG,26,2001-07-16,1.98,86,15,13,12,13,11,13,67,70
+LA Clippers,Brandon,Ingram,PF,7,1997-09-02,2.03,86,16,19,17,17,16,16,81,81
+LA Clippers,Darius,Garland,PG,10,2000-01-26,1.85,87,17,19,20,16,14,18,81,84
+LA Clippers,Jordan,Miller,SG,22,2000-01-23,1.96,88,16,15,14,14,13,15,74,77
+LA Clippers,Isaiah,Jackson,PF,23,2002-01-10,2.03,93,15,13,13,16,14,14,74,77
+LA Clippers,Derrick,Jones Jr.,SF,5,1997-02-15,1.98,95,14,15,13,15,13,14,72,72
+LA Clippers,Nick,Martinelli,SF,12,2004-04-20,2.01,102,14,13,12,13,11,13,72,79
+LA Clippers,Baba,Miller,PF,18,2004-02-07,2.11,94,14,13,12,14,11,13,72,79
+LA Clippers,Keaton,Wagler,SG,1,2007-02-03,1.96,85,16,13,12,13,10,13,72,83
+LA Clippers,Yanic Konan,Niederhauser,C,14,2003-03-14,2.11,110,13,13,12,14,14,12,71,78
+LA Clippers,Max,Strus,SG,31,1996-03-28,1.96,98,15,16,13,13,14,14,71,71
+LA Clippers,Kris,Dunn,PG,8,1994-03-18,1.91,93,15,14,15,15,12,15,70,70
+LA Clippers,Rui,Hachimura,PF,28,1998-02-08,2.03,104,14,16,12,14,13,13,70,70
+LA Clippers,Brook,Lopez,C,11,1988-04-01,2.16,128,10,14,13,15,15,13,70,70
+LA Clippers,Blake,Wesley,SG,20,2003-03-16,1.93,86,15,10,13,13,10,14,69,76
+LA Clippers,Jalen,Pickett,PG,21,1999-10-22,1.88,92,15,14,14,12,11,14,68,68
+Los Angeles Lakers,Luka,Doncic,PG,77,1999-02-28,2.03,104,20,20,20,20,20,20,97,97
+Los Angeles Lakers,Austin,Reaves,PG,15,1998-05-29,1.96,89,18,20,20,17,16,18,86,86
+Los Angeles Lakers,Collin,Sexton,PG,10,1999-01-04,1.91,86,17,18,17,16,13,16,78,78
+Los Angeles Lakers,Sandro,Mamukelashvili,PF,54,1999-05-23,2.06,109,15,16,14,16,16,15,77,77
+Los Angeles Lakers,Quentin,Grimes,SG,5,2000-05-08,1.93,95,16,16,15,15,14,15,74,77
+Los Angeles Lakers,Walker,Kessler,C,14,2001-07-26,2.18,111,13,20,15,18,19,14,73,76
+Los Angeles Lakers,Adou,Thiero,PF,1,2004-05-08,2.03,100,14,12,12,14,12,13,72,79
+Los Angeles Lakers,Cameron,Carr,SG,43,2004-11-21,1.96,83,16,13,12,13,10,13,72,83
+Los Angeles Lakers,Ziaire,Williams,PF,11,2001-09-12,2.06,84,14,15,13,16,11,13,71,74
+Los Angeles Lakers,Matisse,Thybulle,SG,4,1997-03-04,1.96,92,15,16,12,16,12,13,71,71
+Los Angeles Lakers,Jake,LaRavia,SF,12,2001-11-03,2.01,107,14,13,13,15,14,13,70,73
+Los Angeles Lakers,Kevon,Looney,PF,55,1996-02-06,2.06,101,14,12,13,14,14,14,70,70
+Los Angeles Lakers,Jarred,Vanderbilt,PF,2,1999-04-03,2.03,97,14,10,12,14,13,13,68,68
+Los Angeles Lakers,Jaden,Hardy,PG,7,2002-07-05,1.91,90,15,14,13,12,11,12,68,71
+Los Angeles Lakers,Bronny,James,PG,9,2004-10-06,1.88,95,15,14,13,13,10,13,68,75
+Memphis Grizzlies,Cam,Spencer,PG,24,2000-04-06,1.91,93,17,20,18,15,13,18,77,80
+Memphis Grizzlies,Jerami,Grant,SF,3,1994-03-12,2.01,97,15,18,15,15,14,15,77,77
+Memphis Grizzlies,Cedric,Coward,SF,23,2003-09-11,1.96,93,15,16,15,15,15,15,76,83
+Memphis Grizzlies,Ty,Jerome,PG,2,1997-07-08,1.96,88,16,19,18,15,13,17,76,76
+Memphis Grizzlies,GG,Jackson,PF,45,2004-12-17,2.06,95,15,14,14,16,14,14,75,86
+Memphis Grizzlies,Isaiah,Stewart,C,28,2001-05-22,2.03,113,14,14,13,16,16,14,74,77
+Memphis Grizzlies,Olivier-Maxence,Prosper,SF,18,2002-07-03,2.01,104,15,16,13,14,14,14,74,77
+Memphis Grizzlies,Javon,Small,PG,10,2002-12-19,1.85,86,16,17,16,14,13,16,74,81
+Memphis Grizzlies,Zach,Edey,C,14,2002-03-14,2.21,138,14,15,13,17,20,13,74,77
+Memphis Grizzlies,Scotty,Pippen Jr.,PG,1,2000-11-10,1.88,77,16,14,17,16,11,15,72,75
+Memphis Grizzlies,Cameron,Boozer,PF,27,2007-07-18,2.03,115,14,13,12,14,12,13,72,83
+Memphis Grizzlies,Carson,Cooper,C,20,2004-04-09,2.11,111,13,13,12,14,12,13,72,79
+Memphis Grizzlies,Karim,Lopez,PF,35,2007-04-12,2.03,101,14,13,12,14,11,13,72,83
+Memphis Grizzlies,Jaylen,Wells,SF,0,2003-08-26,2.01,93,14,15,13,14,13,13,71,78
+Memphis Grizzlies,Quinten,Post,C,41,2000-03-21,2.13,108,13,14,13,14,14,13,70,73
+Miami Heat,Giannis,Antetokounmpo,PF,7,1994-12-06,2.11,110,19,18,20,20,20,20,94,94
+Miami Heat,Bam,Adebayo,C,13,1997-07-18,2.06,118,15,17,17,18,20,17,83,83
+Miami Heat,Andrew,Wiggins,SF,22,1995-02-23,2.01,95,15,18,15,16,15,15,77,77
+Miami Heat,Bobby,Portis,PF,95,1995-02-10,2.06,113,15,18,14,16,17,15,77,77
+Miami Heat,Pelle,Larsson,SG,9,2001-02-23,1.96,98,16,14,15,14,14,15,73,76
+Miami Heat,Tim,Hardaway Jr.,SG,10,1992-03-16,1.96,93,14,17,13,14,12,14,72,72
+Miami Heat,Davion,Mitchell,PG,2,1998-09-05,1.83,95,16,14,18,14,13,17,72,72
+Miami Heat,Dru,Smith,PG,12,1997-12-30,1.88,91,16,13,15,15,12,15,72,72
+Miami Heat,Ryan,Conwell,PG,4,2004-06-15,1.91,100,16,13,13,13,11,13,72,79
+Miami Heat,Tre,Donaldson,PG,24,2003-12-11,1.88,95,16,13,13,13,11,13,72,79
+Miami Heat,Simone,Fontecchio,SF,0,1995-12-09,2.01,100,14,16,13,13,13,14,71,71
+Miami Heat,Klay,Thompson,SG,11,1990-02-08,1.96,100,13,15,13,13,12,13,70,70
+Miami Heat,Myron,Gardner,SF,15,2001-05-21,1.96,102,14,13,12,13,13,14,70,73
+Miami Heat,Keshad,Johnson,SF,16,2001-06-23,1.98,104,14,13,12,13,12,12,70,73
+Miami Heat,Nick,Richards,C,8,1997-11-29,2.11,111,13,11,12,14,15,12,69,69
+Milwaukee Bucks,Ryan,Rollins,PG,13,2002-07-03,1.91,82,17,18,19,17,14,17,80,83
+Milwaukee Bucks,Tyler,Herro,SG,11,2000-01-20,1.96,93,17,20,17,16,15,17,80,83
+Milwaukee Bucks,Kel'el,Ware,C,9,2004-04-20,2.13,113,15,17,14,17,19,14,79,86
+Milwaukee Bucks,Jaime,Jaquez Jr.,SF,24,2001-02-18,1.98,104,16,15,17,15,16,17,78,81
+Milwaukee Bucks,Myles,Turner,C,3,1996-03-24,2.11,113,14,16,14,17,16,14,75,75
+Milwaukee Bucks,Kyle,Kuzma,PF,18,1995-07-24,2.03,100,15,15,15,15,15,15,74,74
+Milwaukee Bucks,Cormac,Ryan,SG,30,1998-10-26,1.96,88,16,19,13,14,12,14,72,72
+Milwaukee Bucks,Nate,Ament,PF,15,2006-12-10,2.08,96,14,13,12,14,11,13,72,83
+Milwaukee Bucks,Brayden,Burries,SG,0,2005-09-18,1.93,98,16,13,12,13,11,13,72,83
+Milwaukee Bucks,Bogoljub,Markovic,PF,23,2005-07-12,2.11,95,14,13,12,14,11,13,72,83
+Milwaukee Bucks,Jericho,Sims,C,00,1998-10-20,2.08,113,13,11,13,14,15,13,69,69
+Milwaukee Bucks,Caris,LeVert,SG,12,1994-08-25,2.01,93,15,12,14,14,11,14,69,69
+Milwaukee Bucks,Kasparas,Jakucionis,SG,25,2006-05-29,1.96,93,15,17,13,13,12,14,69,80
+Milwaukee Bucks,AJ,Green,SG,20,1999-09-27,1.93,86,15,16,13,13,11,13,68,68
+Milwaukee Bucks,Ousmane,Dieng,PF,21,2003-05-21,2.06,84,14,13,13,14,11,13,68,75
+Minnesota Timberwolves,Anthony,Edwards,SG,5,2001-08-05,1.93,102,19,20,18,19,18,18,89,92
+Minnesota Timberwolves,LaMelo,Ball,PG,1,2001-08-22,2.01,82,18,20,20,17,16,19,85,88
+Minnesota Timberwolves,Rudy,Gobert,C,27,1992-06-26,2.16,117,13,12,15,18,20,15,79,79
+Minnesota Timberwolves,Ayo,Dosunmu,SG,13,2000-01-17,1.93,91,17,19,16,15,14,16,77,80
+Minnesota Timberwolves,Jaden,McDaniels,PF,3,2000-09-29,2.06,84,15,18,15,17,14,15,76,79
+Minnesota Timberwolves,Donte,DiVincenzo,SG,0,1997-01-31,1.93,92,16,15,15,15,14,16,74,74
+Minnesota Timberwolves,Jonathan,Kuminga,SF,24,2002-10-06,2.01,102,15,14,14,14,15,14,73,76
+Minnesota Timberwolves,Bones,Hyland,PG,8,2000-09-14,1.88,77,16,15,15,14,11,15,72,75
+Minnesota Timberwolves,Joan,Beringer,PF,19,2006-11-11,2.11,104,14,13,12,14,13,13,72,83
+Minnesota Timberwolves,Rocco,Zikarsky,C,44,2006-07-11,2.21,115,13,16,12,15,14,13,72,83
+Minnesota Timberwolves,Isaiah,Evans,SF,33,2005-12-06,1.98,84,14,13,12,13,10,13,72,83
+Minnesota Timberwolves,Terrence,Shannon Jr.,SG,4,2000-07-30,1.98,98,15,15,12,13,11,13,69,72
+Minnesota Timberwolves,Cody,Williams,PF,9,2004-11-20,2.03,86,14,9,13,14,11,13,68,79
+Minnesota Timberwolves,Jaylen,Clark,SG,7,2001-10-13,1.96,93,14,11,11,13,11,12,66,69
+Minnesota Timberwolves,Zyon,Pullin,SG,15,2001-03-03,1.93,93,14,15,12,12,10,13,66,69
+New Orleans Pelicans,Zion,Williamson,SF,1,2000-07-06,1.98,129,17,17,17,17,20,17,86,89
+New Orleans Pelicans,Trey,Murphy III,PF,25,2000-06-18,2.03,93,17,20,17,18,17,17,83,86
+New Orleans Pelicans,Saddiq,Bey,PF,41,1999-04-09,2.03,98,16,18,15,16,16,16,79,79
+New Orleans Pelicans,Derik,Queen,C,22,2004-12-27,2.06,113,14,15,16,17,18,16,77,88
+New Orleans Pelicans,Bennedict,Mathurin,SG,24,2002-06-19,1.96,95,17,16,15,15,15,15,77,80
+New Orleans Pelicans,Jeremiah,Fears,PG,0,2006-10-14,1.91,86,16,15,16,15,13,15,75,86
+New Orleans Pelicans,Dejounte,Murray,PG,5,1996-09-19,1.93,82,16,16,19,16,14,16,75,75
+New Orleans Pelicans,Julian,Reese,PF,13,2003-06-30,2.06,114,15,13,14,16,19,14,73,80
+New Orleans Pelicans,Yves,Missi,C,21,2004-05-14,2.11,107,13,11,13,16,15,14,72,79
+New Orleans Pelicans,Karlo,Matkovic,PF,17,2001-03-30,2.08,105,14,13,13,15,14,13,72,75
+New Orleans Pelicans,Malik,Dia,PF,8,2004-02-04,2.06,113,14,13,12,14,12,13,72,79
+New Orleans Pelicans,Jordan,Poole,SG,3,1999-06-19,1.93,88,15,15,14,14,11,14,71,71
+New Orleans Pelicans,DeAndre,Jordan,C,6,1988-07-21,2.11,120,10,12,12,15,16,13,71,71
+New Orleans Pelicans,Trendon,Watford,PF,9,2000-11-09,2.03,108,14,13,14,14,13,14,70,73
+New Orleans Pelicans,Herbert,Jones,SF,2,1998-10-06,2.01,93,14,13,14,15,12,14,69,69
+New York Knicks,Jalen,Brunson,PG,11,1996-08-31,1.88,86,18,20,20,17,15,19,86,86
+New York Knicks,Karl-Anthony,Towns,C,32,1995-11-15,2.13,112,16,20,17,18,20,17,86,86
+New York Knicks,OG,Anunoby,SF,8,1997-07-17,2.01,109,16,18,15,17,16,15,78,78
+New York Knicks,Mikal,Bridges,SG,25,1996-08-30,1.98,95,17,17,16,16,14,17,77,77
+New York Knicks,Josh,Hart,PG,3,1995-03-06,1.96,98,17,17,18,16,17,16,77,77
+New York Knicks,Andre,Drummond,C,0,1993-08-10,2.11,127,13,12,13,16,19,14,74,74
+New York Knicks,Miles,McBride,PG,2,2000-09-08,1.88,88,16,16,15,14,12,15,72,75
+New York Knicks,Pacome,Dadiet,PF,4,2005-07-27,2.06,95,14,14,12,14,11,14,72,83
+New York Knicks,Jose,Alvarado,PG,5,1998-04-12,1.83,81,15,14,15,14,11,15,70,70
+New York Knicks,Jordan,Clarkson,SG,00,1992-06-07,1.96,88,14,14,12,13,11,13,69,69
+New York Knicks,Landry,Shamet,SG,44,1997-03-13,1.96,86,15,14,12,13,11,13,69,69
+New York Knicks,Tyler,Kolek,PG,13,2001-03-27,1.88,88,15,13,14,13,11,14,69,72
+New York Knicks,Dalton,Knecht,SF,99,2001-04-19,1.98,98,14,12,11,12,11,12,68,71
+New York Knicks,Mohamed,Diawara,PF,51,2005-04-29,2.06,102,13,13,12,13,11,12,67,78
+New York Knicks,James,Wiseman,C,35,2001-03-31,2.11,109,12,9,11,13,12,12,66,69
+Oklahoma City Thunder,Shai,Gilgeous-Alexander,PG,2,1998-07-12,1.98,88,20,20,20,20,18,20,94,94
+Oklahoma City Thunder,Chet,Holmgren,C,7,2002-05-01,2.16,94,16,18,16,19,19,16,84,87
+Oklahoma City Thunder,Isaiah,Hartenstein,C,55,1998-05-05,2.13,113,15,14,16,17,20,16,80,80
+Oklahoma City Thunder,Jalen,Williams,PG,8,2001-04-14,1.96,96,17,16,19,16,15,18,80,83
+Oklahoma City Thunder,Ajay,Mitchell,SG,25,2002-06-25,1.93,86,17,17,16,16,13,16,77,80
+Oklahoma City Thunder,Jaylin,Williams,PF,6,2002-06-29,2.06,109,14,15,14,15,15,14,72,75
+Oklahoma City Thunder,Josh,Dix,SG,21,2004-06-29,1.96,93,16,13,12,13,11,13,72,79
+Oklahoma City Thunder,Aday,Mara,C,15,2005-04-07,2.21,119,13,13,12,14,13,13,72,83
+Oklahoma City Thunder,Thomas,Sorber,C,12,2005-12-25,2.06,113,13,13,12,14,12,13,72,83
+Oklahoma City Thunder,Cason,Wallace,PG,22,2003-11-07,1.91,88,15,15,15,16,12,15,71,78
+Oklahoma City Thunder,Alex,Caruso,SG,9,1994-02-28,1.96,84,15,13,13,14,11,14,70,70
+Oklahoma City Thunder,Kenrich,Williams,SG,34,1994-12-02,2.01,95,15,13,13,13,13,13,70,70
+Oklahoma City Thunder,Nikola,Topic,SG,44,2005-08-10,1.98,91,15,10,15,13,11,15,70,81
+Oklahoma City Thunder,Dalen,Terry,SG,0,2002-07-12,1.98,95,15,10,12,13,11,14,69,72
+Oklahoma City Thunder,Jared,McCain,PG,3,2004-02-20,1.91,88,15,16,13,13,11,13,68,75
+Orlando Magic,Paolo,Banchero,PF,5,2002-11-12,2.08,113,17,17,18,17,20,17,83,90
+Orlando Magic,Franz,Wagner,PF,22,2001-08-27,2.08,100,16,18,17,17,17,17,82,85
+Orlando Magic,Desmond,Bane,SG,3,1998-06-25,1.98,98,17,20,17,16,15,17,80,80
+Orlando Magic,Nikola,Vucevic,C,9,1990-10-24,2.06,118,13,18,16,17,19,16,80,80
+Orlando Magic,Jalen,Suggs,PG,4,2001-06-03,1.96,93,17,17,18,17,14,17,78,81
+Orlando Magic,Anthony,Black,SG,0,2004-01-20,2.01,91,16,15,16,16,14,15,76,83
+Orlando Magic,Goga,Bitadze,C,35,1999-07-20,2.11,113,14,14,14,16,16,15,76,76
+Orlando Magic,Wendell,Carter Jr.,C,34,1999-04-16,2.08,122,14,15,14,16,18,14,74,74
+Orlando Magic,Tristan,da Silva,PF,23,2001-05-15,2.03,98,14,16,13,15,13,13,70,73
+Orlando Magic,Jamal,Cain,SF,8,1999-03-20,2.01,87,14,16,12,13,11,13,70,70
+Orlando Magic,Jonathan,Isaac,PF,1,1997-10-03,2.08,104,14,11,12,14,13,12,69,69
+Orlando Magic,Jevon,Carter,PG,2,1995-09-14,1.83,91,15,14,13,13,11,13,68,68
+Orlando Magic,Noah,Penda,SF,93,2005-01-07,2.01,98,14,11,12,13,12,13,68,79
+Orlando Magic,Jase,Richardson,PG,11,2005-10-16,1.85,82,15,12,13,12,10,13,68,79
+Orlando Magic,Alex,Morales,SG,30,1997-11-21,1.98,82,14,15,12,12,9,12,66,66
+Philadelphia 76ers,Joel,Embiid,C,21,1994-03-16,2.13,122,17,20,19,19,20,18,91,91
+Philadelphia 76ers,Tyrese,Maxey,PG,0,2000-11-04,1.88,93,19,20,20,20,17,20,90,93
+Philadelphia 76ers,Jaylen,Brown,PG,7,1996-10-24,1.98,101,19,20,20,18,19,19,90,90
+Philadelphia 76ers,LeBron,James,PF,23,1984-12-30,2.06,113,13,17,20,19,19,19,87,87
+Philadelphia 76ers,VJ,Edgecombe,SG,77,2005-07-30,1.96,82,17,17,16,16,15,16,77,88
+Philadelphia 76ers,Anfernee,Simons,SG,5,1999-06-08,1.93,93,16,18,14,14,13,15,74,74
+Philadelphia 76ers,Labaron,Philon Jr.,PG,00,2005-11-24,1.91,81,16,13,13,13,10,13,72,83
+Philadelphia 76ers,Dominick,Barlow,PF,25,2003-05-26,2.06,108,14,13,13,15,15,13,71,78
+Philadelphia 76ers,Adem,Bona,C,30,2003-03-28,2.08,108,13,12,12,15,14,12,69,76
+Philadelphia 76ers,Kentavious,Caldwell-Pope,SG,1,1993-02-18,1.96,97,14,15,14,13,12,14,69,69
+Philadelphia 76ers,Caleb,Love,PG,8,2001-09-27,1.91,97,15,13,14,13,12,14,69,72
+Philadelphia 76ers,Ariel,Hukporti,C,55,2002-04-12,2.13,117,13,13,12,14,14,12,69,72
+Philadelphia 76ers,Dean,Wade,PF,45,1996-11-20,2.06,101,14,13,12,14,13,15,68,68
+Philadelphia 76ers,Justin,Edwards,SF,11,2003-12-16,2.01,101,14,15,12,13,11,13,68,75
+Philadelphia 76ers,Jabari,Walker,SF,33,2002-07-30,2.01,109,14,12,12,13,13,12,68,71
+Phoenix Suns,Devin,Booker,PG,15,1996-10-30,1.96,93,18,19,20,17,16,18,86,86
+Phoenix Suns,Mark,Williams,C,25,2001-12-16,2.16,109,15,16,15,18,19,15,81,84
+Phoenix Suns,Miles,Bridges,SF,22,1998-03-21,2.01,102,16,16,16,15,16,16,78,78
+Phoenix Suns,Collin,Gillespie,PG,12,1999-06-25,1.85,88,16,18,17,15,14,16,76,76
+Phoenix Suns,Dillon,Brooks,SF,3,1996-01-22,2.01,102,15,17,14,15,14,14,76,76
+Phoenix Suns,Jalen,Green,SG,4,2002-02-09,1.93,84,16,15,15,15,13,15,75,78
+Phoenix Suns,Jordan,Goodwin,PG,23,1998-10-23,1.91,98,16,14,15,15,14,14,73,73
+Phoenix Suns,Oso,Ighodaro,PF,11,2002-07-14,2.11,107,14,10,14,15,15,14,72,75
+Phoenix Suns,Koa,Peat,PF,18,2007-01-20,2.03,111,14,13,12,14,12,13,72,83
+Phoenix Suns,Luke,Kennard,SG,8,1996-06-24,1.96,93,15,19,14,14,12,14,71,71
+Phoenix Suns,Pat,Spencer,PG,61,1996-07-04,1.88,93,15,14,15,13,12,15,70,70
+Phoenix Suns,Jamaree,Bouyea,PG,17,1999-06-27,1.88,82,15,11,14,14,11,14,70,70
+Phoenix Suns,Khaman,Maluach,C,10,2006-09-14,2.18,113,13,12,12,14,14,12,70,81
+Phoenix Suns,Drew,Timme,PF,2,2000-09-09,2.08,107,14,10,12,13,12,13,70,73
+Phoenix Suns,Ryan,Dunn,SF,0,2003-01-07,2.01,98,14,10,13,14,13,13,69,76
+Portland Trail Blazers,Deni,Avdija,PF,8,2001-01-03,2.03,103,17,18,20,18,19,19,87,90
+Portland Trail Blazers,Donovan,Clingan,C,23,2004-02-23,2.18,127,15,15,16,18,20,16,82,89
+Portland Trail Blazers,Jrue,Holiday,PG,5,1990-06-12,1.93,100,15,18,19,16,16,17,79,79
+Portland Trail Blazers,Shaedon,Sharpe,SG,17,2003-05-30,1.96,95,17,17,16,16,15,15,79,86
+Portland Trail Blazers,Robert,Williams III,C,35,1997-10-17,2.06,113,15,13,14,17,18,15,79,79
+Portland Trail Blazers,Ja,Morant,PG,1,1999-08-10,1.88,79,16,15,20,15,13,17,76,76
+Portland Trail Blazers,Micah,Potter,C,9,1998-04-06,2.06,112,14,18,14,15,16,14,74,74
+Portland Trail Blazers,Scoot,Henderson,PG,00,2004-02-03,1.91,94,16,16,16,14,13,15,73,80
+Portland Trail Blazers,Toumani,Camara,SF,33,2000-05-08,2.01,104,14,14,14,15,15,14,72,75
+Portland Trail Blazers,Branden,Carlson,C,10,1999-06-14,2.13,100,13,12,12,14,13,13,72,72
+Portland Trail Blazers,Chris,Youngblood,SG,11,2002-02-09,1.93,100,15,15,12,13,11,15,70,73
+Portland Trail Blazers,Vit,Krejci,SG,27,2000-06-19,2.03,88,15,14,13,13,11,14,69,72
+Portland Trail Blazers,Yang,Hansen,C,16,2005-06-26,2.16,122,12,13,11,13,13,12,67,78
+Portland Trail Blazers,John,Tonje,SF,2,2001-04-23,1.96,102,13,14,11,12,11,11,66,69
+Portland Trail Blazers,Jayson,Kent,SG,29,2002-02-03,2.03,98,14,15,11,12,11,11,66,69
+Sacramento Kings,Domantas,Sabonis,PF,11,1996-05-03,2.08,109,15,15,16,16,20,16,77,77
+Sacramento Kings,Maxime,Raynaud,C,42,2003-04-07,2.16,113,14,15,14,16,18,14,76,83
+Sacramento Kings,Zach,LaVine,SG,8,1995-03-10,1.96,91,16,18,15,15,13,15,76,76
+Sacramento Kings,Precious,Achiuwa,PF,9,1999-09-19,2.03,110,15,12,14,16,17,14,75,75
+Sacramento Kings,Malik,Monk,PG,0,1998-02-04,1.91,91,16,18,16,14,12,15,74,74
+Sacramento Kings,Dylan,Cardwell,C,32,2001-12-16,2.08,116,13,11,13,16,17,14,73,76
+Sacramento Kings,Keegan,Murray,PF,13,2000-08-19,2.03,102,15,13,13,17,15,14,73,76
+Sacramento Kings,Darius,Acuff Jr.,PG,5,2006-11-16,1.88,84,16,13,13,13,10,13,72,83
+Sacramento Kings,Emanuel,Sharp,PG,34,2004-03-07,1.91,94,16,13,13,13,11,13,72,79
+Sacramento Kings,De'Andre,Hunter,SF,15,1997-12-02,2.01,100,14,15,13,14,14,13,71,71
+Sacramento Kings,Daeqwon,Plowden,SG,29,1998-08-29,1.98,98,15,15,13,14,13,13,70,70
+Sacramento Kings,Jonathan,Mogbo,PF,22,2001-10-29,2.06,102,14,11,12,14,12,13,70,73
+Sacramento Kings,Leaky,Black,SF,19,1999-06-14,1.98,95,14,15,13,14,13,13,69,69
+Sacramento Kings,Nique,Clifford,SG,10,2002-02-09,1.96,79,15,13,13,13,11,13,68,71
+Sacramento Kings,Sean,Pedulla,PG,3,2002-10-10,1.85,88,14,11,12,12,9,14,66,69
+San Antonio Spurs,Victor,Wembanyama,PF,1,2004-01-04,2.24,109,19,20,19,20,20,19,96,96
+San Antonio Spurs,De'Aaron,Fox,PG,4,1997-12-20,1.91,86,17,16,20,16,14,18,81,81
+San Antonio Spurs,Stephon,Castle,PG,5,2004-11-01,1.98,100,17,16,20,16,16,18,81,88
+San Antonio Spurs,Keldon,Johnson,SF,3,1999-10-11,1.98,98,15,16,14,14,15,14,76,76
+San Antonio Spurs,Dylan,Harper,SG,2,2006-03-02,1.96,100,16,15,16,15,14,16,76,87
+San Antonio Spurs,Tobias,Harris,PF,23,1992-07-15,2.03,104,14,17,15,16,15,15,75,75
+San Antonio Spurs,Luke,Kornet,C,7,1995-07-15,2.16,122,14,15,14,16,17,16,75,75
+San Antonio Spurs,Devin,Vassell,SG,24,2000-08-23,1.96,93,16,17,14,15,14,15,74,77
+San Antonio Spurs,Julian,Champagnie,SF,30,2001-06-29,2.01,98,14,16,13,14,15,14,72,75
+San Antonio Spurs,Maliq,Brown,PF,15,2003-11-15,2.06,107,14,13,12,14,12,13,72,79
+San Antonio Spurs,Ja'Kobi,Gillespie,PG,17,2004-03-10,1.85,82,16,13,13,13,10,13,72,79
+San Antonio Spurs,Jayden,Quaintance,PF,22,2007-07-11,2.08,116,14,13,12,14,12,13,72,83
+San Antonio Spurs,Harrison,Barnes,PF,40,1992-05-30,2.03,102,13,16,13,14,13,14,70,70
+San Antonio Spurs,Jordan,McLaughlin,PG,0,1996-04-09,1.83,82,15,14,13,13,10,13,69,69
+San Antonio Spurs,Carter,Bryant,SF,11,2005-11-26,2.01,104,13,12,11,12,12,12,67,78
+Toronto Raptors,Kawhi,Leonard,SF,2,1991-06-29,1.98,102,17,20,19,20,20,19,93,93
+Toronto Raptors,Scottie,Barnes,PF,4,2001-08-01,2.03,108,17,17,19,20,19,18,85,88
+Toronto Raptors,Immanuel,Quickley,PG,5,1999-06-17,1.88,86,17,18,19,16,14,18,80,80
+Toronto Raptors,RJ,Barrett,SF,9,2000-06-14,1.98,97,16,16,16,16,16,16,80,83
+Toronto Raptors,Jakob,Poeltl,C,19,1995-10-15,2.13,115,14,13,15,17,18,15,78,78
+Toronto Raptors,Collin,Murray-Boyles,SF,30,2005-06-10,2.01,111,15,13,14,16,16,15,75,86
+Toronto Raptors,Allen,Graves,PF,22,2006-07-28,2.03,102,14,13,12,14,11,13,72,83
+Toronto Raptors,Kyle,Anderson,PF,12,1993-09-20,2.03,104,13,13,14,15,14,15,71,71
+Toronto Raptors,Trayce,Jackson-Davis,PF,32,2000-02-22,2.06,111,14,10,12,14,14,13,71,74
+Toronto Raptors,Malachi,Smith,SG,18,1999-12-06,1.93,93,15,19,14,14,13,15,71,74
+Toronto Raptors,Kevin,McCullar Jr.,SG,9,2001-03-15,1.98,95,15,8,12,13,11,13,70,73
+Toronto Raptors,Jamal,Shead,PG,23,2002-07-24,1.85,91,15,13,17,14,11,16,69,72
+Toronto Raptors,Ja'Kobe,Walter,SG,14,2004-09-04,1.93,82,15,15,12,14,11,13,69,76
+Toronto Raptors,Jamison,Battle,SF,77,2001-05-10,2.01,100,14,11,11,12,11,12,68,71
+Toronto Raptors,Alijah,Martin,PG,55,2001-12-26,1.88,96,14,12,12,12,10,12,66,69
+Utah Jazz,Lauri,Markkanen,PF,23,1997-05-22,2.16,109,17,20,17,18,19,17,87,87
+Utah Jazz,Keyonte,George,PG,3,2003-11-08,1.93,84,18,20,20,17,15,18,84,91
+Utah Jazz,Jaren,Jackson Jr.,PF,20,1999-09-15,2.08,110,16,17,15,18,17,15,79,79
+Utah Jazz,Jusuf,Nurkic,C,30,1994-08-23,2.11,132,14,13,17,17,20,16,78,78
+Utah Jazz,Kyle,Filipowski,PF,2,2003-11-07,2.11,113,15,15,15,16,17,15,76,83
+Utah Jazz,Isaiah,Collier,PG,8,2004-10-08,1.93,95,16,13,19,15,13,17,76,83
+Utah Jazz,Jaxson,Hayes,C,11,2000-05-23,2.13,100,14,13,13,16,14,14,75,78
+Utah Jazz,Brice,Sensabaugh,SF,28,2003-10-30,1.98,107,15,16,14,14,14,14,74,81
+Utah Jazz,Ace,Bailey,SG,19,2006-08-13,2.06,91,16,14,13,15,13,14,72,83
+Utah Jazz,Darryn,Peterson,SG,22,2007-01-17,1.96,90,16,13,12,13,11,13,72,83
+Utah Jazz,Svi,Mykhailiuk,SG,10,1997-06-10,2.01,93,15,17,13,13,12,14,69,69
+Utah Jazz,Tony,Bradley,C,13,1998-01-08,2.08,112,13,13,12,13,13,13,69,69
+Utah Jazz,Josh,Okogie,SG,21,1998-09-01,1.93,97,14,12,11,13,11,12,66,66
+Utah Jazz,Josh,Green,SG,5,2000-11-16,1.98,91,14,16,11,12,11,12,66,69
+Utah Jazz,Kobe,Bufkin,SG,4,2003-09-21,1.93,88,14,11,11,12,10,12,66,73
+Washington Wizards,Alex,Sarr,C,20,2005-04-26,2.13,93,15,16,16,19,17,16,82,93
+Washington Wizards,Anthony,Davis,PF,23,1993-03-11,2.08,115,15,14,16,18,20,16,80,80
+Washington Wizards,Deandre,Ayton,C,8,1998-07-23,2.13,114,14,14,14,17,18,14,78,78
+Washington Wizards,Kyshawn,George,PF,18,2003-12-12,2.03,91,15,17,16,17,15,16,76,83
+Washington Wizards,Trae,Young,PG,3,1998-09-19,1.88,74,16,16,20,15,11,18,76,76
+Washington Wizards,Justin,Champagnie,SF,9,2001-06-29,1.98,93,15,14,14,15,15,14,75,78
+Washington Wizards,Bilal,Coulibaly,SG,0,2004-07-26,2.01,88,16,14,14,16,14,15,74,81
+Washington Wizards,Tristan,Vukcevic,PF,00,2003-03-11,2.13,100,15,15,13,15,13,13,73,80
+Washington Wizards,AJ,Dybantsa,PF,4,2007-01-29,2.06,98,14,13,12,14,11,13,72,83
+Washington Wizards,Felix,Okpara,PF,34,2004-04-20,2.11,108,14,13,12,14,12,13,72,79
+Washington Wizards,Bub,Carrington,PG,7,2005-07-21,1.93,86,15,15,16,13,12,15,70,81
+Washington Wizards,Will,Riley,SG,27,2006-02-10,2.06,82,15,14,13,13,11,13,70,81
+Washington Wizards,Tre,Johnson,SG,12,2006-03-07,1.96,86,15,16,13,13,12,13,70,81
+Washington Wizards,Khris,Middleton,SF,22,1991-08-12,2.01,101,12,16,14,13,13,14,70,70
+Washington Wizards,Jamir,Watkins,SG,5,2001-07-06,1.98,95,15,12,13,14,13,13,70,73
