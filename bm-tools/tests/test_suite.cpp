@@ -13,6 +13,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 #include <memory>
@@ -914,8 +915,66 @@ void TestSavedCareerResumesMidSeason() {
     CareerVacation("new_season");
     TEST_ASSERT(std::string(CareerGetStateJson()).find("2027/28") != std::string::npos, "The resumed career reaches the next season");
     TEST_ASSERT(std::filesystem::exists(dbPath + ".bak"), "The previous save is kept as a backup");
+    TEST_ASSERT(std::string(CareerGetSaveError()).empty(), "No save error is reported while saving works");
+
+    // A save from a newer version of the game is refused with a clear message
+    {
+        sqlite3* raw = nullptr;
+        sqlite3_open(dbPath.c_str(), &raw);
+        sqlite3_exec(raw, "UPDATE career_state SET value = '99' WHERE key = 'version'", nullptr, nullptr, nullptr);
+        sqlite3_close(raw);
+    }
+    LoadDatabase(dbPath.c_str());
+    TEST_ASSERT(CareerResume("3", 9, dbPath.c_str()) == 0 && std::string(CareerGetMessage()).find("newer version") != std::string::npos,
+                "A save from a newer game version is refused with a message");
     CareerEnd();
     std::filesystem::remove_all(base);
+    g_testsPassed++;
+}
+
+static std::string LeagueProblem(const CareerManager& career, bool checkRosterSize) {
+    std::map<std::string, int> seen;
+    for (const auto& t : career.Teams()) {
+        if (checkRosterSize && (static_cast<int>(t->roster.size()) < CareerManager::MinRosterSize() || static_cast<int>(t->roster.size()) > CareerManager::MaxRosterSize())) {
+            return "roster size " + std::to_string(t->roster.size()) + " at " + t->name;
+        }
+        std::set<int> jerseys;
+        for (const auto& p : t->roster) {
+            if (++seen[p->playerId] > 1) return "player on two lists: " + p->playerId;
+            if (!jerseys.insert(p->jerseyNumber).second) return "two players wear " + std::to_string(p->jerseyNumber) + " at " + t->name;
+            if (career.IsRetiredNumber(t->teamId, p->jerseyNumber)) return "retired number worn at " + t->name;
+            const int a = p->attributes.currentAbility;
+            if (a < 30 || a > 99 || p->attributes.potentialAbility < a) return "rating out of range: " + p->playerId;
+            if (p->age < 17 || p->age > 46) return "age out of range: " + p->playerId + " " + std::to_string(p->age);
+            if (p->salary < CareerManager::MinimumSalary() || p->contractEndYear < career.SeasonYear()) return "bad contract: " + p->playerId + " salary " + std::to_string(p->salary) + " ends " + std::to_string(p->contractEndYear) + " season " + std::to_string(career.SeasonYear());
+        }
+    }
+    for (const auto& p : career.FreeAgents()) {
+        if (++seen[p->playerId] > 1) return "free agent also elsewhere: " + p->playerId;
+    }
+    return "";
+}
+
+void TestManySeasonsStayConsistent() {
+    const char* env = std::getenv("BM_LONG_SEASONS");
+    const int seasons = env ? std::max(1, std::atoi(env)) : 4;
+    std::cout << "[TEST] Career: " << seasons << " seasons in a row keep the league consistent...\n";
+    auto league = CreateLeague(30, 31);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "5";
+    cfg.seed = 77;
+    career.Start(league, cfg);
+    for (int i = 0; i < seasons; ++i) {
+        career.Vacation("month");
+        const std::string problem = LeagueProblem(career, true);
+        TEST_ASSERT(problem.empty(), ("Season " + std::to_string(i + 1) + ": " + problem).c_str());
+        career.Vacation("new_season");
+        const std::string offseason = LeagueProblem(career, false);
+        TEST_ASSERT(offseason.empty(), ("After season " + std::to_string(i + 1) + ": " + offseason).c_str());
+    }
+    TEST_ASSERT(career.SeasonYear() == 2026 + seasons, "Every season rolled over");
+    TEST_ASSERT(career.RetiredPlayerCount() >= 0 && career.FreeAgents().size() <= 200, "The free agent pool stays bounded");
     g_testsPassed++;
 }
 
@@ -1162,6 +1221,7 @@ int main() {
     TestRetirementAndHallOfFame();
     TestRandomLeagueAndSavedCareer();
     TestSavedCareerResumesMidSeason();
+    TestManySeasonsStayConsistent();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

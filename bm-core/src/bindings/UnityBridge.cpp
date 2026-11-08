@@ -29,6 +29,7 @@ std::string freeAgentsJson;
 std::string draftJson;
 std::string historyJson;
 std::string careerSavePath;
+std::string careerSaveError;   // empty while saving works; shown to the player
 std::string summerJson;
 std::string careerMessage;
 std::string leagueMessage;
@@ -1289,15 +1290,20 @@ static bool WriteCareerSave(const std::string& path, std::string* error) {
     return ok;
 }
 
+const char* CareerGetSaveError() {
+    return careerSaveError.c_str();
+}
+
 int CareerEnableAutosave(const char* leagueDbPath) {
     if (!career || !leagueDbPath) return 0;
     careerSavePath = leagueDbPath;
     career->SetSeasonStartHook([]() {
         std::string error;
-        if (!WriteCareerSave(careerSavePath, &error)) careerMessage = "Autosave failed: " + error;
+        careerSaveError = WriteCareerSave(careerSavePath, &error) ? std::string() : error;
     });
     std::string error;
-    if (!WriteCareerSave(careerSavePath, &error)) { careerMessage = "Autosave failed: " + error; return 0; }
+    if (!WriteCareerSave(careerSavePath, &error)) { careerSaveError = error; return 0; }
+    careerSaveError.clear();
     return 1;
 }
 
@@ -1333,8 +1339,9 @@ int CareerResume(const char* userTeamId, int seed, const char* leagueDbPath) {
     careerSavePath = leagueDbPath;
     career->SetSeasonStartHook([]() {
         std::string saveError;
-        if (!WriteCareerSave(careerSavePath, &saveError)) careerMessage = "Autosave failed: " + saveError;
+        careerSaveError = WriteCareerSave(careerSavePath, &saveError) ? std::string() : saveError;
     });
+    careerSaveError.clear();
     careerMessage.clear();
     return 1;
 }

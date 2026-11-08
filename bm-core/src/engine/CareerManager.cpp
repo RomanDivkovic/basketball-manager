@@ -848,7 +848,7 @@ void CareerManager::AssignInitialContracts() {
             p->birthDate = std::to_string(seasonYear - p->age) + "-07-01";
             const unsigned h = Hash(p->playerId);
             const double variance = 0.92 + (h % 17) / 100.0;
-            p->salary = static_cast<int>(std::round(MarketValue(*p) * variance / 10000.0)) * 10000;
+            p->salary = std::max(MinimumSalary(), static_cast<int>(std::round(MarketValue(*p) * variance / 10000.0)) * 10000);
             p->contractEndYear = seasonYear + static_cast<int>((h >> 3) % 4);
         }
     }
@@ -1633,6 +1633,9 @@ void CareerManager::ApplyProgression() {
 
 namespace {
 
+// Older saves are read with defaults for what they lack (version 1 had no mid-season state); newer ones are refused
+constexpr int kSaveVersion = 2;
+
 bool Exec(sqlite3* db, const std::string& sql, std::string* error) {
     char* message = nullptr;
     if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &message) != SQLITE_OK) {
@@ -1678,7 +1681,7 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
 
     if (auto st = prepare("INSERT INTO career_state (key, value) VALUES (?, ?)")) {
         const std::vector<std::pair<std::string, std::string>> values = {
-            {"version", "2"}, {"user_team", userTeamId}, {"start_year", std::to_string(config.startYear)}, {"seed", std::to_string(config.seed)},
+            {"version", std::to_string(kSaveVersion)}, {"user_team", userTeamId}, {"start_year", std::to_string(config.startYear)}, {"seed", std::to_string(config.seed)},
             {"season_year", std::to_string(seasonYear)}, {"salary_cap", std::to_string(salaryCap)}, {"luxury_line", std::to_string(luxuryLine)},
             {"talent_anchor", std::to_string(talentAnchor)}, {"wins", std::to_string(completedWins)}, {"losses", std::to_string(completedLosses)},
             {"titles", std::to_string(titlesWon)}, {"next_prospect", std::to_string(nextProspectId)}, {"retired_players", std::to_string(retiredPlayerCount)},
@@ -1806,7 +1809,10 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     if (sqlite3_prepare_v2(db, "SELECT key, value FROM career_state", -1, &st, nullptr) != SQLITE_OK) return fail("This league has no saved career");
     while (sqlite3_step(st) == SQLITE_ROW) values[ColumnText(st, 0)] = ColumnText(st, 1);
     sqlite3_finalize(st);
-    if ((values["version"] != "1" && values["version"] != "2") || values["user_team"] != userTeamId) return fail("The saved career belongs to another club");
+    const int version = std::atoi(values["version"].c_str());
+    if (version > kSaveVersion) return fail("This save was made by a newer version of the game. Update the game to open it.");
+    if (version < 1) return fail("This league file holds no readable career save.");
+    if (values["user_team"] != userTeamId) return fail("The saved career belongs to another club");
     auto number = [&](const char* key, int fallback) { return values.count(key) ? std::atoi(values[key].c_str()) : fallback; };
 
     // Every team starts empty, then the saved players take their places
