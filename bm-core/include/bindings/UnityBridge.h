@@ -78,6 +78,7 @@ int CareerStart(const char* userTeamId, int startYear, int seed);
 void CareerEnd();
 int CareerHasSave(const char* leagueDbPath, const char* userTeamId);   // 1 when the league file holds a saved career for this club
 int CareerResume(const char* userTeamId, int seed, const char* leagueDbPath);   // continue from the last season start
+const char* CareerGetSaveError();                                       // empty when saving works
 int CareerEnableAutosave(const char* leagueDbPath);                   // saves now and at every new season
 const char* CareerGetStateJson();
 const char* CareerContinue();                    // moves time until something needs the coach; returns the stop

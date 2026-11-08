@@ -7,10 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find required packages
 find_package(SQLite3 REQUIRED)
 
-# Find Lua (system installation via Homebrew or apt)
-find_package(Lua REQUIRED)
-if(NOT LUA_FOUND)
-    message(FATAL_ERROR "Lua not found. Install via: brew install lua (macOS) or apt-get install lua5.4 (Ubuntu)")
+# Lua 5.5 is built from the sources in third_party/lua so the library does not depend on Homebrew
+enable_language(C)
+file(GLOB BM_LUA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/lua/*.c)
+add_library(bm_lua STATIC ${BM_LUA_SOURCES})
+target_include_directories(bm_lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/lua)
+set_target_properties(bm_lua PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
+if(UNIX)
+    target_compile_definitions(bm_lua PRIVATE LUA_USE_POSIX)
 endif()
 
 # Source files
@@ -61,7 +65,7 @@ add_library(BMCore SHARED ${SOURCES} ${HEADERS})
 target_include_directories(BMCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${SQLITE3_INCLUDE_DIRS}
-    ${LUA_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/lua
 )
 
 # Lua is linked statically on macOS so the shipped library does not depend on Homebrew
@@ -77,8 +81,8 @@ endif()
 # Link libraries
 target_link_libraries(BMCore PUBLIC
     SQLite3::SQLite3
-    ${BM_LUA_LINK}
 )
+target_link_libraries(BMCore PRIVATE bm_lua)
 
 # Output to lib directory
 set_target_properties(BMCore PROPERTIES

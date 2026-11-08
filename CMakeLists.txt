@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Runs on macOS 11 and newer (must be set before project())
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
+
 project(BasketballManager VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
