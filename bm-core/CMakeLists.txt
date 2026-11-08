@@ -68,6 +68,16 @@ target_include_directories(BMCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/lua
 )
 
+# Lua is linked statically on macOS so the shipped library does not depend on Homebrew
+set(BM_LUA_LINK ${LUA_LIBRARIES})
+if(APPLE)
+    find_library(BM_LUA_STATIC NAMES liblua.a HINTS /opt/homebrew/opt/lua/lib /usr/local/opt/lua/lib)
+    if(BM_LUA_STATIC)
+        set(BM_LUA_LINK ${BM_LUA_STATIC})
+        message(STATUS "Linking Lua statically: ${BM_LUA_STATIC}")
+    endif()
+endif()
+
 # Link libraries
 target_link_libraries(BMCore PUBLIC
     SQLite3::SQLite3
