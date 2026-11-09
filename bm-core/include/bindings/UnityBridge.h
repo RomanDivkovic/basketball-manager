@@ -82,6 +82,9 @@ const char* CareerGetSaveError();                                       // empty
 int CareerEnableAutosave(const char* leagueDbPath);                   // saves now and at every new season
 const char* CareerGetStateJson();
 const char* CareerContinue();                    // moves time until something needs the coach; returns the stop
+const char* CareerStepDay();                      // one day; returns a stop, or kind "day" when the day passed
+int CareerAnswerQuestion(int option);            // answer to a player question
+const char* CareerGetBoxScoreJson(int day);      // box score of the coach's game on a fixture day
 const char* CareerVacation(const char* target);  // week, month, playoffs, season_end, draft, free_agency, camp, new_season
 void CareerDismissStop();
 const char* CareerGetScheduleJson();

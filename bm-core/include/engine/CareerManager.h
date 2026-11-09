@@ -42,10 +42,27 @@ const char* PhaseName(CareerPhase phase);
 
 // What the coach must (or may) look at before time moves on
 struct CareerStop {
-    std::string kind;      // "none", "coach_game", "draft", "camp_plan", "summer_choice", "roster_check", or an info kind
+    std::string kind;      // "none", "day" (one day passed), "coach_game", "player_question", "draft", "camp_plan", "summer_choice", "roster_check", or an info kind
     std::string title;
     std::string detail;
     bool blocking = false;
+    std::vector<std::string> options;   // answers to a player question
+    std::string playerId;               // the player a question or news item is about
+};
+
+struct BoxLine {
+    std::string name, position;
+    int minutes = 0, points = 0, rebounds = 0, assists = 0, steals = 0, blocks = 0, turnovers = 0, fouls = 0;
+};
+
+// A finished game of the coach's team with the box score
+struct GameRecord {
+    int season = 0;
+    int day = 0;                 // fixture day (regular season)
+    std::string date, kind, label, homeName, awayName;
+    bool userHome = true;
+    int homeScore = 0, awayScore = 0;
+    std::vector<BoxLine> home, away;   // by real venue
 };
 
 struct CareerEvent {
@@ -131,6 +148,13 @@ public:
 
     // Moves time until something needs the coach; stops at once if something already does
     CareerStop Continue(int maxDays = 400);
+    // Moves exactly one day: returns a stop when something needs the coach first, otherwise kind "day"
+    CareerStop StepOne();
+    bool AnswerQuestion(int option);          // the coach's answer to a player question
+    const std::vector<GameRecord>& GameRecords() const { return gameRecords; }
+    const GameRecord* FindGameRecord(int season, int day) const;
+    int WinStreak() const { return winStreak; }
+    int LossStreak() const { return lossStreak; }
     // The assistant runs the club (matches, contracts, draft, camp) until the target; target in
     // {"week","month","playoffs","season_end","draft","free_agency","camp","new_season"}
     CareerStop Vacation(const std::string& target);
@@ -293,6 +317,16 @@ private:
     std::vector<HallOfFameEntry> hallOfFame;
     std::vector<RetiredNumber> retiredNumbers;
     int retiredPlayerCount = 0;
+    std::deque<CareerStop> newsQueue;                // injuries, returns and the like, shown one at a time
+    struct PendingQuestion { bool active = false; std::string type, playerId, text; std::vector<std::string> options; };
+    PendingQuestion pendingQuestion;
+    int lastQuestionDay = 0;
+    std::map<std::string, int> injuredUntil;         // player id -> first day he is fit again
+    std::vector<GameRecord> gameRecords;
+    int winStreak = 0;
+    int lossStreak = 0;
+    int lastUserWins = 0;
+    int lastUserLosses = 0;
     std::function<void()> seasonStartHook;       // called when a new season begins (autosave)
     double talentAnchor = 0.0;      // average of every team's ten best players when the career began
 
@@ -352,6 +386,14 @@ private:
     int RollProgression(const Player& player, bool isUserTeam, bool summer);
     void ApplyDelta(Player& player, int delta, bool isUserTeam);
     void UpdateCareerRecords();
+    void UpdateMoodFromResults();
+    void ExpireInjuries();
+    void RollInjuries();
+    void MaybeAskQuestion();
+    void GenerateStartingFreeAgents(int count);
+    void CaptureBox(int day, const std::string& label, const std::string& kind, const std::shared_ptr<Team>& home,
+                    const std::shared_ptr<Team>& away, int homeScore, int awayScore);
+    void AddMood(const std::vector<std::shared_ptr<Player>>& players, float delta);
     void Retire(const std::shared_ptr<Player>& player, const std::shared_ptr<Team>& team);
 };
 
