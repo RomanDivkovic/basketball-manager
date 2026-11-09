@@ -49,6 +49,11 @@ MatchEngine::MatchEngine() : matchState(nullptr), speedMultiplier(1), pauseEnabl
 MatchEngine::~MatchEngine() {
 }
 
+void MatchEngine::SetLineupOverride(bool isHomeTeam, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes) {
+    startersOverride[isHomeTeam ? 0 : 1] = starters;
+    if (tacticalManager) tacticalManager->SetMinuteOverride(isHomeTeam, minutes);
+}
+
 void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_ptr<Team> awayTeam) {
     std::cout << "[MatchEngine] Initializing 48-minute match: " << homeTeam->name << " vs " << awayTeam->name << "\n";
 
@@ -109,7 +114,7 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
     feedTotal = 0;
     
     // Initialize starting five (best 5 available by ability)
-    auto setupStartingFive = [](std::shared_ptr<Team> team, std::vector<std::shared_ptr<Player>>& lineup) {
+    auto setupStartingFive = [](std::shared_ptr<Team> team, std::vector<std::shared_ptr<Player>>& lineup, const std::vector<std::string>& wanted) {
         std::vector<std::shared_ptr<Player>> sorted;
         for (auto& p : team->roster) {
             if (!p->injured && p->active) {
@@ -134,16 +139,29 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
         });
 
         int count = 0;
+        // The coach's own five first (if fit), then the best of the rest
+        for (const auto& id : wanted) {
+            if (count >= 5) break;
+            for (auto& player : sorted) {
+                if (player->playerId == id && !player->onCourt) {
+                    player->onCourt = true;
+                    lineup.push_back(player);
+                    count++;
+                    break;
+                }
+            }
+        }
         for (auto& player : sorted) {
             if (count >= 5) break;
+            if (player->onCourt) continue;
             player->onCourt = true;
             lineup.push_back(player);
             count++;
         }
     };
 
-    setupStartingFive(homeTeam, matchState->homeStartingFive);
-    setupStartingFive(awayTeam, matchState->awayStartingFive);
+    setupStartingFive(homeTeam, matchState->homeStartingFive, startersOverride[0]);
+    setupStartingFive(awayTeam, matchState->awayStartingFive, startersOverride[1]);
 
     // Initialize initial spatial court positions (tip-off formation)
     UpdateSpatialState(nullptr, nullptr, "tipoff");

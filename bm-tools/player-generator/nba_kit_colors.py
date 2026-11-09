@@ -27,7 +27,7 @@ KITS = {
     "Indiana Pacers": ("#002D62", BLACK),
     "Los Angeles Clippers": ("#C8102E", BLACK),
     "LA Clippers": ("#C8102E", BLACK),
-    "Los Angeles Lakers": ("#552583", BLACK),
+    "Los Angeles Lakers": ("#552583", "#FDB927"),
     "Memphis Grizzlies": ("#5D76A9", BLACK),
     "Miami Heat": ("#98002E", BLACK),
     "Milwaukee Bucks": ("#00471B", BLACK),

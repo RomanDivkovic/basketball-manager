@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <string>
 
 namespace bm {
@@ -45,6 +46,9 @@ public:
     void LoadTeams(const std::vector<std::shared_ptr<Team>>& teams);
     void SetGamesPerTeam(int games) { gamesPerTeam = games; }
     void SetScheduleSeed(unsigned seed) { scheduleSeed = seed; hasScheduleSeed = true; }
+    // Adds a finished game's box score of the team's players to their season totals
+    void AddPlayerGameStats(const std::shared_ptr<Team>& team, bool playoffs);
+    void SetTeamLineup(const std::string& teamId, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes) { teamLineups[teamId] = Lineup{starters, minutes}; }
     // Quiet = headless matches and no console output (used when a whole year is simulated)
     void SetQuiet(bool value);
     int GetSeasonYear() const { return seasonYear; }
@@ -170,6 +174,9 @@ private:
     int currentPlayoffRound;
     std::shared_ptr<Team> champion;
     int gamesPerTeam = 82;
+    struct Lineup { std::vector<std::string> starters; std::unordered_map<std::string, int> minutes; };
+    std::map<std::string, Lineup> teamLineups;   // the coach's choices by team id
+    bool recordStats = true;
     unsigned scheduleSeed = 0;
     bool hasScheduleSeed = false;
     bool quiet = false;
