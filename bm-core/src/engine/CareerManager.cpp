@@ -1,4 +1,5 @@
 #include "engine/CareerManager.h"
+#include "common/Traits.h"
 #include "db/LeagueImport.h"
 #include "player/PlayerGenerator.h"
 #include <sqlite3.h>
@@ -1065,6 +1066,101 @@ bool CareerManager::ReleasePlayer(const std::string& playerId, std::string* mess
     return true;
 }
 
+bool CareerManager::TradesOpen() const {
+    switch (phase) {
+        case CareerPhase::Preseason:
+        case CareerPhase::Review:
+        case CareerPhase::Offseason:
+        case CareerPhase::TrainingCamp:
+            return true;
+        case CareerPhase::RegularSeason:
+            return RegularSeasonDay() <= static_cast<int>(0.65 * RegularSeasonLength());   // the trade deadline
+        default:
+            return false;
+    }
+}
+
+// The club values stars far above role players: value grows with the square of the rating over replacement level
+static double TradeWorth(double score) {
+    const double over = std::max(1.0, score - 55.0);
+    return over * over;
+}
+
+CareerManager::TradeResult CareerManager::Trade(const std::string& teamId, const std::vector<std::string>& giveIds,
+                                                const std::vector<std::string>& getIds, bool execute) {
+    TradeResult result;
+    auto reject = [&](const std::string& text) { result.message = text; return result; };
+    auto mine = FindTeam(userTeamId);
+    auto other = FindTeam(teamId);
+    if (!mine || !other || other == mine) return reject("Pick a club to trade with");
+    if (!TradesOpen()) return reject("The trade window is closed (the deadline has passed or the playoffs are on)");
+    if (giveIds.empty() && getIds.empty()) return reject("Pick the players you want to trade");
+
+    auto find = [](const std::shared_ptr<Team>& team, const std::vector<std::string>& ids, std::vector<std::shared_ptr<Player>>& out) {
+        for (const auto& id : ids) {
+            std::shared_ptr<Player> found;
+            for (const auto& p : team->roster) if (p->playerId == id) found = p;
+            if (!found) return false;
+            if (std::find(out.begin(), out.end(), found) == out.end()) out.push_back(found);
+        }
+        return true;
+    };
+    std::vector<std::shared_ptr<Player>> give, get;
+    if (!find(mine, giveIds, give) || !find(other, getIds, get)) return reject("One of the players is no longer on that roster");
+
+    for (const auto& p : give) result.giveValue += TradeWorth(ValueScore(*p));
+    for (const auto& p : get) result.getValue += TradeWorth(ValueScore(*p));
+
+    const bool inSeason = phase == CareerPhase::Preseason || phase == CareerPhase::RegularSeason;
+    const int maxSize = inSeason ? MaxRosterSize() : 20;
+    const int minSize = inSeason ? MinRosterSize() : 10;
+    const int myAfter = static_cast<int>(mine->roster.size()) - static_cast<int>(give.size()) + static_cast<int>(get.size());
+    const int theirAfter = static_cast<int>(other->roster.size()) + static_cast<int>(give.size()) - static_cast<int>(get.size());
+    if (myAfter > maxSize) return reject("Your roster would be over " + std::to_string(maxSize) + " players");
+    if (theirAfter > maxSize) return reject(other->name + " would have too many players");
+    if (myAfter < minSize) return reject("You would be left with fewer than " + std::to_string(minSize) + " players. Ask for more in return or sign free agents first");
+    if (theirAfter < minSize) return reject(other->name + " would be left with too few players");
+
+    int outgoing = 0, incoming = 0;
+    for (const auto& p : give) outgoing += p->salary;
+    for (const auto& p : get) incoming += p->salary;
+    auto salaryOk = [&](int payrollBefore, int sent, int received) {
+        const int after = payrollBefore - sent + received;
+        return received <= sent || after <= salaryCap || received <= static_cast<int>(sent * 1.25) + 100000;
+    };
+    if (!salaryOk(Payroll(userTeamId), outgoing, incoming) || Payroll(userTeamId) - outgoing + incoming > luxuryLine) {
+        return reject("The salaries do not work for you: over the cap you may take back at most 125% of what you send (and stay under the luxury line)");
+    }
+    if (!salaryOk(Payroll(teamId), incoming, outgoing)) return reject(other->name + " cannot take on that much salary");
+
+    result.valid = true;
+    result.accepted = result.getValue <= 0.0 ? result.giveValue >= 0.0 : result.giveValue >= result.getValue * 1.08;
+    if (!result.accepted) {
+        result.message = other->name + " want more in return.";
+        return result;
+    }
+    result.message = other->name + " accept the trade.";
+    if (!execute) return result;
+
+    for (const auto& p : give) {
+        RemoveFromTeam(mine, p->playerId);
+        userStarters.erase(std::remove(userStarters.begin(), userStarters.end(), p->playerId), userStarters.end());
+        userMinutes.erase(p->playerId);
+    }
+    for (const auto& p : get) RemoveFromTeam(other, p->playerId);
+    for (const auto& p : give) { p->jerseyNumber = FreeJersey(*other, p->jerseyNumber); p->onCourt = false; other->roster.push_back(p); }
+    for (const auto& p : get) { p->jerseyNumber = FreeJersey(*mine, p->jerseyNumber); p->onCourt = false; mine->roster.push_back(p); }
+    if (userStarters.size() < 5) userStarters.clear();
+    PushLineup();
+    std::string sent, received;
+    for (const auto& p : give) sent += (sent.empty() ? "" : ", ") + FullName(*p);
+    for (const auto& p : get) received += (received.empty() ? "" : ", ") + FullName(*p);
+    Post("Trade", "You traded " + (sent.empty() ? std::string("nobody") : sent) + " to " + other->name + " for " + (received.empty() ? std::string("nothing") : received) + ".");
+    result.executed = true;
+    result.message = "Done: " + (sent.empty() ? std::string("nobody") : sent) + " for " + (received.empty() ? std::string("nothing") : received) + ".";
+    return result;
+}
+
 bool CareerManager::SignFreeAgent(const std::string& playerId, int years, std::string* message) {
     auto say = [&](const std::string& text) { if (message) *message = text; };
     auto team = FindTeam(userTeamId);
@@ -1896,6 +1992,61 @@ void CareerManager::ArchiveSeasonStats() {
             }
         }
     }
+    AwardTraits();
+}
+
+void CareerManager::AwardTraits() {
+    struct Rule {
+        Trait trait;
+        std::function<bool(const Player&)> attributes;
+        std::function<bool(const SeasonTotals&)> season;   // one season's averages are good enough
+    };
+    auto per = [](float total, const SeasonTotals& s) { return total / std::max(1.0f, s.games); };
+    const std::vector<Rule> rules = {
+        {TRAIT_SHARPSHOOTER, [](const Player& p) { return p.attributes.shooting >= 17; },
+            [&](const SeasonTotals& s) { return per(s.points, s) >= 18.0f; }},
+        {TRAIT_FLYING_HIGH, [](const Player& p) { return p.attributes.physical >= 17 && p.attributes.pace >= 15; },
+            [&](const SeasonTotals& s) { return per(s.points, s) >= 14.0f; }},
+        {TRAIT_MID_RANGE_DEMON, [](const Player& p) { return p.attributes.shooting >= 16 && p.attributes.technical >= 15; },
+            [&](const SeasonTotals& s) { return per(s.points, s) >= 17.0f; }},
+        {TRAIT_COOKIE_MONSTER, [](const Player& p) { return p.attributes.defense >= 17 && p.attributes.pace >= 13; },
+            [&](const SeasonTotals& s) { return per(s.steals, s) >= 1.6f; }},
+        {TRAIT_NOT_IN_MY_HOUSE, [](const Player& p) { return p.attributes.defense >= 16 && p.attributes.physical >= 16; },
+            [&](const SeasonTotals& s) { return per(s.blocks, s) >= 1.1f; }},
+        {TRAIT_POST_UP_DEMON, [](const Player& p) { return p.attributes.physical >= 17 && p.attributes.technical >= 14
+                                                          && (p.position == Position::C || p.position == Position::PF); },
+            [&](const SeasonTotals& s) { return per(s.points, s) >= 15.0f && per(s.rebounds, s) >= 7.0f; }},
+        {TRAIT_ALL_AROUND, [](const Player& p) { return p.attributes.shooting >= 14 && p.attributes.ballControl >= 14
+                                                       && p.attributes.defense >= 14 && p.attributes.physical >= 14; },
+            [&](const SeasonTotals& s) { return per(s.points, s) >= 15.0f && per(s.rebounds, s) >= 6.0f && per(s.assists, s) >= 4.5f; }},
+        {TRAIT_FLOOR_GENERAL, [](const Player& p) { return p.attributes.ballControl >= 17 && p.attributes.technical >= 16; },
+            [&](const SeasonTotals& s) { return per(s.assists, s) >= 5.0f; }},
+    };
+    std::uniform_real_distribution<double> roll(0.0, 1.0);
+    for (const auto& t : teams) {
+        for (const auto& p : t->roster) {
+            auto history = statHistory.find(p->playerId);
+            if (history == statHistory.end()) continue;
+            int owned = 0;
+            for (const auto& r : rules) if (HasTrait(p->traits, r.trait)) ++owned;
+            for (const auto& r : rules) {
+                if (owned >= 3) break;
+                if (HasTrait(p->traits, r.trait) || !r.attributes(*p)) continue;
+                int good = 0;
+                for (const auto& rec : history->second) {
+                    if (rec.kind == 0 && rec.line.games >= 40.0f && r.season(rec.line)) ++good;
+                }
+                if (good < 2 || roll(rng) > 0.35) continue;
+                p->traits |= r.trait;
+                ++owned;
+                int n = 0;
+                const TraitInfo* all = AllTraits(&n);
+                std::string name;
+                for (int i = 0; i < n; ++i) if (all[i].bit == r.trait) name = all[i].name;
+                if (t->teamId == userTeamId) Post("New trait", FullName(*p) + " has earned the " + name + " trait after seasons of strong production.");
+            }
+        }
+    }
 }
 
 bool CareerManager::SetLineup(const std::vector<std::string>& starters, const std::map<std::string, int>& minutes) {
@@ -2017,7 +2168,7 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         "CREATE TABLE career_state (key TEXT PRIMARY KEY, value TEXT);"
         "CREATE TABLE career_players (player_id TEXT PRIMARY KEY, team_id TEXT, sort_order INTEGER, first_name TEXT, last_name TEXT,"
         " position INTEGER, height REAL, weight REAL, birth_date TEXT, jersey INTEGER, pace INTEGER, shooting INTEGER, ball_control INTEGER,"
-        " defense INTEGER, physical INTEGER, technical INTEGER, ability INTEGER, potential INTEGER, salary INTEGER, contract_end INTEGER, age INTEGER, mood REAL);"
+        " defense INTEGER, physical INTEGER, technical INTEGER, ability INTEGER, potential INTEGER, salary INTEGER, contract_end INTEGER, age INTEGER, mood REAL, traits TEXT);"
         "CREATE TABLE career_games (season INTEGER, day INTEGER, date TEXT, kind TEXT, label TEXT, home_name TEXT, away_name TEXT, user_home INTEGER, home_score INTEGER, away_score INTEGER, box TEXT);"
         "CREATE TABLE career_records (player_id TEXT PRIMARY KEY, peak INTEGER, seasons INTEGER, team_id TEXT, tenure INTEGER);"
         "CREATE TABLE career_hall (player_id TEXT, name TEXT, position TEXT, team_name TEXT, year INTEGER, peak INTEGER, seasons INTEGER, number INTEGER, number_retired INTEGER);"
@@ -2055,7 +2206,7 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         }
         sqlite3_finalize(st);
     }
-    if (auto st = prepare("INSERT INTO career_players VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+    if (auto st = prepare("INSERT INTO career_players VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
         auto write = [&](const Player& p, const std::string& teamId, int order) {
             sqlite3_reset(st);
             text(st, 1, p.playerId);
@@ -2072,6 +2223,7 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
             const int values[] = {a.pace, a.shooting, a.ballControl, a.defense, a.physical, a.technical, a.currentAbility, a.potentialAbility, p.salary, p.contractEndYear, p.age};
             for (int i = 0; i < 11; ++i) sqlite3_bind_int(st, 11 + i, values[i]);
             sqlite3_bind_double(st, 22, p.seasonMood);
+            text(st, 23, TraitsToCsv(p.traits));
             if (sqlite3_step(st) != SQLITE_DONE) {
                 ok = false;
                 if (error && error->empty()) *error = "player " + p.playerId + " (" + teamId + "): " + sqlite3_errmsg(db);
@@ -2225,9 +2377,13 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     freeAgents.clear();
     prospects.clear();
     customProspects.clear();
-    if (sqlite3_prepare_v2(db, "SELECT player_id, team_id, first_name, last_name, position, height, weight, birth_date, jersey, pace, shooting,"
-                               " ball_control, defense, physical, technical, ability, potential, salary, contract_end, age, mood"
-                               " FROM career_players ORDER BY team_id, sort_order", -1, &st, nullptr) != SQLITE_OK) return fail("The saved players could not be read");
+    // Saves from before traits existed have no such column
+    const std::string playerColumns = "SELECT player_id, team_id, first_name, last_name, position, height, weight, birth_date, jersey, pace, shooting,"
+                                      " ball_control, defense, physical, technical, ability, potential, salary, contract_end, age, mood";
+    const bool withTraits = sqlite3_prepare_v2(db, (playerColumns + ", traits FROM career_players ORDER BY team_id, sort_order").c_str(), -1, &st, nullptr) == SQLITE_OK;
+    if (!withTraits && sqlite3_prepare_v2(db, (playerColumns + " FROM career_players ORDER BY team_id, sort_order").c_str(), -1, &st, nullptr) != SQLITE_OK) {
+        return fail("The saved players could not be read");
+    }
     while (sqlite3_step(st) == SQLITE_ROW) {
         auto p = std::make_shared<Player>();
         p->playerId = ColumnText(st, 0);
@@ -2252,6 +2408,7 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
         p->contractEndYear = sqlite3_column_int(st, 18);
         p->age = sqlite3_column_int(st, 19);
         p->seasonMood = static_cast<float>(sqlite3_column_double(st, 20));
+        if (withTraits) p->traits = TraitsFromCsv(ColumnText(st, 21));
         p->active = true;
         p->injured = false;
         if (teamId.empty()) freeAgents.push_back(p);

@@ -1084,6 +1084,53 @@ void TestCoachLineupAndMinutes() {
     g_testsPassed++;
 }
 
+void TestTraitsAndTrades() {
+    std::cout << "[TEST] Traits shape matches and trades work...\n";
+    TEST_ASSERT(bm::TraitsFromCsv(bm::TraitsToCsv(bm::TRAIT_SHARPSHOOTER | bm::TRAIT_ALL_AROUND)) == (bm::TRAIT_SHARPSHOOTER | bm::TRAIT_ALL_AROUND), "Traits survive a text round trip");
+    TEST_ASSERT(bm::TraitsFromCsv("Sharpshooter|cookie_monster, post_up_demon") == (bm::TRAIT_SHARPSHOOTER | bm::TRAIT_COOKIE_MONSTER | bm::TRAIT_POST_UP_DEMON), "League files can list traits");
+
+    // A match where everybody has every trait still plays to the end
+    {
+        auto league = CreateLeague(30, 77);
+        for (auto& p : league[0]->roster) p->traits = 255u;
+        for (auto& p : league[1]->roster) p->traits = 255u;
+        bm::engine::MatchEngine engine;
+        engine.InitializeMatch(league[0], league[1]);
+        engine.SimulateFullMatch();
+        TEST_ASSERT(engine.GetMatchState()->matchComplete, "A match with traits everywhere finishes");
+    }
+
+    auto league = CreateLeague(30, 78);
+    bm::engine::CareerManager career;
+    bm::engine::CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 9;
+    career.Start(league, cfg);
+    TEST_ASSERT(career.TradesOpen(), "Trades are open in the preseason");
+
+    auto mine = league[0];
+    auto other = league[5];
+    auto byAbility = [](const auto& a, const auto& b) { return a->attributes.currentAbility < b->attributes.currentAbility; };
+    auto best = *std::max_element(mine->roster.begin(), mine->roster.end(), byAbility);
+    auto myWorst = *std::min_element(mine->roster.begin(), mine->roster.end(), byAbility);
+    auto theirBest = *std::max_element(other->roster.begin(), other->roster.end(), byAbility);
+    auto worst = *std::min_element(other->roster.begin(), other->roster.end(), byAbility);
+    for (auto& p : {best, myWorst, theirBest, worst}) p->salary = 5000000;   // keep the salaries out of the way
+    auto bad = career.Trade(other->teamId, {myWorst->playerId}, {theirBest->playerId}, false);
+    std::cout << "  trade message: " << bad.message << "\n";
+    TEST_ASSERT(bad.valid && !bad.accepted, "A club will not give its best player for a worse one");
+
+    auto good = career.Trade(other->teamId, {best->playerId}, {worst->playerId}, true);
+    TEST_ASSERT(good.accepted && good.executed, "A club accepts a star for a role player");
+    bool movedMine = false, movedTheirs = false;
+    for (const auto& p : other->roster) if (p == best) movedMine = true;
+    for (const auto& p : mine->roster) if (p == worst) movedTheirs = true;
+    TEST_ASSERT(movedMine && movedTheirs, "The players change clubs");
+    auto unknown = career.Trade(other->teamId, {"nobody"}, {}, false);
+    TEST_ASSERT(!unknown.valid, "A player who is not on the roster cannot be traded");
+    g_testsPassed++;
+}
+
 void TestRetirementAndHallOfFame() {
     std::cout << "[TEST] Career: old stars retire into the Hall of Fame and clubs retire numbers...\n";
     auto league = CreateLeague(30, 23);
@@ -1330,6 +1377,7 @@ int main() {
     TestManySeasonsStayConsistent();
     TestDayByDayAndEvents();
     TestCoachLineupAndMinutes();
+    TestTraitsAndTrades();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

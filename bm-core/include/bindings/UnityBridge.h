@@ -85,6 +85,8 @@ const char* CareerContinue();                    // moves time until something n
 const char* CareerStepDay();                      // one day; returns a stop, or kind "day" when the day passed
 int CareerSetLineup(const char* startersCsv, const char* minutesCsv);   // the coach's starting five and minute targets
 int CareerAnswerQuestion(int option);            // answer to a player question
+int CareerTradesOpen();
+const char* CareerTrade(const char* teamId, const char* giveCsv, const char* getCsv, int execute);   // JSON verdict; execute = 1 makes the trade if accepted
 const char* CareerGetPlayerJson(const char* playerId);   // profile and season-by-season statistics of any player
 const char* CareerGetBoxScoreJson(int day);      // box score of the coach's game on a fixture day
 const char* CareerVacation(const char* target);  // week, month, playoffs, season_end, draft, free_agency, camp, new_season

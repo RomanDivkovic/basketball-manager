@@ -211,6 +211,18 @@ public:
     int Quote(const Player& player, int years, bool ownPlayer) const;   // salary he asks for that length
     bool RenewContract(const std::string& playerId, int years, std::string* message);
     bool ReleasePlayer(const std::string& playerId, std::string* message);
+
+    // ---- trades with the other clubs ----
+    struct TradeResult {
+        bool valid = false;        // the deal is legal (rosters, salaries, window)
+        bool accepted = false;     // the other club agrees
+        bool executed = false;
+        double giveValue = 0.0;    // what the coach sends, in the club's eyes
+        double getValue = 0.0;     // what he asks for
+        std::string message;
+    };
+    bool TradesOpen() const;
+    TradeResult Trade(const std::string& teamId, const std::vector<std::string>& giveIds, const std::vector<std::string>& getIds, bool execute);
     const std::vector<std::shared_ptr<Player>>& FreeAgents() const { return freeAgents; }
     bool SignFreeAgent(const std::string& playerId, int years, std::string* message);
     bool FreeAgencyOpen() const;
@@ -337,6 +349,7 @@ private:
     std::vector<std::string> userStarters;
     std::map<std::string, std::vector<SeasonStatRecord>> statHistory;
     void ArchiveSeasonStats();
+    void AwardTraits();                       // rare badges for players with the attributes and the seasons to back them up
     std::map<std::string, int> userMinutes;
     void PushLineup();
     std::map<std::string, int> injuredUntil;         // player id -> first day he is fit again
