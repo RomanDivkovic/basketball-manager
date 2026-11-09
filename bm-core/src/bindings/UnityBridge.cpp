@@ -316,7 +316,10 @@ int CareerCalendarDay() {
 std::string StopJson(const bm::engine::CareerStop& stop) {
     std::ostringstream json;
     json << "{\"kind\":\"" << EscapeJson(stop.kind) << "\",\"title\":\"" << EscapeJson(stop.title)
-         << "\",\"detail\":\"" << EscapeJson(stop.detail) << "\",\"blocking\":" << (stop.blocking ? "true" : "false") << "}";
+         << "\",\"detail\":\"" << EscapeJson(stop.detail) << "\",\"blocking\":" << (stop.blocking ? "true" : "false")
+         << ",\"playerId\":\"" << EscapeJson(stop.playerId) << "\",\"options\":[";
+    for (size_t i = 0; i < stop.options.size(); ++i) json << (i ? "," : "") << "\"" << EscapeJson(stop.options[i]) << "\"";
+    json << "]}";
     return json.str();
 }
 
@@ -478,7 +481,8 @@ std::string BuildScheduleJson() {
             if (!home && g.awayTeam->teamId != userId) continue;
             json << (first ? "" : ",") << "{\"day\":" << d << ",\"date\":\"" << EscapeJson(career->FixtureDateLabel(d))
                  << "\",\"opponent\":\"" << EscapeJson((home ? g.awayTeam : g.homeTeam)->name) << "\",\"home\":" << (home ? "true" : "false")
-                 << ",\"played\":" << (g.played ? "true" : "false") << ",\"mine\":" << (home ? g.homeScore : g.awayScore)
+                 << ",\"played\":" << (g.played ? "true" : "false") << ",\"hasBox\":" << (career->FindGameRecord(career->SeasonYear(), d) ? "true" : "false")
+                 << ",\"mine\":" << (home ? g.homeScore : g.awayScore)
                  << ",\"theirs\":" << (home ? g.awayScore : g.homeScore) << "}";
             first = false;
         }
@@ -1107,6 +1111,8 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"contractEnd\":" << p->contractEndYear
              << ",\"stamina\":" << stamina
              << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
+             << ",\"injured\":" << (p->injured ? "true" : "false")
+             << ",\"mood\":" << std::fixed << std::setprecision(2) << p->seasonMood
              << "}";
     }
     json << "]}";
@@ -1362,6 +1368,52 @@ const char* CareerContinue() {
     careerLastStop = career->Continue();
     careerStopJson = StopJson(careerLastStop);
     return careerStopJson.c_str();
+}
+
+const char* CareerStepDay() {
+    if (!career) { careerStopJson = "{\"kind\":\"none\"}"; return careerStopJson.c_str(); }
+    bm::engine::CareerStop stop = career->StepOne();
+    if (stop.kind == "day") {
+        careerLastStop = bm::engine::CareerStop();
+        careerLastStop.kind = "none";
+    } else {
+        careerLastStop = stop;
+    }
+    careerStopJson = StopJson(stop);
+    return careerStopJson.c_str();
+}
+
+int CareerAnswerQuestion(int option) {
+    if (!career || !career->AnswerQuestion(option)) return 0;
+    careerLastStop = bm::engine::CareerStop();
+    careerLastStop.kind = "none";
+    return 1;
+}
+
+static std::string boxScoreJson;
+
+const char* CareerGetBoxScoreJson(int day) {
+    const bm::engine::GameRecord* r = career ? career->FindGameRecord(career->SeasonYear(), day) : nullptr;
+    if (!r) { boxScoreJson = "{\"found\":false}"; return boxScoreJson.c_str(); }
+    auto side = [](const std::vector<bm::engine::BoxLine>& lines) {
+        std::ostringstream out;
+        out << "[";
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const auto& l = lines[i];
+            out << (i ? "," : "") << "{\"name\":\"" << EscapeJson(l.name) << "\",\"pos\":\"" << l.position << "\",\"min\":" << l.minutes
+                << ",\"pts\":" << l.points << ",\"reb\":" << l.rebounds << ",\"ast\":" << l.assists << ",\"stl\":" << l.steals
+                << ",\"blk\":" << l.blocks << ",\"tov\":" << l.turnovers << ",\"pf\":" << l.fouls << "}";
+        }
+        out << "]";
+        return out.str();
+    };
+    std::ostringstream json;
+    json << "{\"found\":true,\"date\":\"" << EscapeJson(r->date) << "\",\"label\":\"" << EscapeJson(r->label)
+         << "\",\"homeName\":\"" << EscapeJson(r->homeName) << "\",\"awayName\":\"" << EscapeJson(r->awayName)
+         << "\",\"homeScore\":" << r->homeScore << ",\"awayScore\":" << r->awayScore << ",\"userHome\":" << (r->userHome ? "true" : "false")
+         << ",\"home\":" << side(r->home) << ",\"away\":" << side(r->away) << "}";
+    boxScoreJson = json.str();
+    return boxScoreJson.c_str();
 }
 
 const char* CareerVacation(const char* target) {

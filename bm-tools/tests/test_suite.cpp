@@ -562,6 +562,8 @@ static std::vector<std::shared_ptr<bm::Team>> CreateLeague(int teamCount, unsign
 static void ScriptedCoach(CareerManager& c, const CareerStop& stop) {
     if (stop.kind == "coach_game") {
         c.SimulateCoachGame();
+    } else if (stop.kind == "player_question") {
+        c.AnswerQuestion(0);
     } else if (stop.kind == "draft_class") {
         c.UseGeneratedDraftClass();
     } else if (stop.kind == "draft") {
@@ -735,7 +737,12 @@ void TestCoachGameCanBePlayedLive() {
         if (rec.team->teamId == awayId) awayLosses = rec.losses;
     }
     TEST_ASSERT(homeWins == 1 && awayLosses == 1, "The standings show the recorded result");
-    TEST_ASSERT(career.Continue().kind == "coach_game" && career.Today() > DaysFromCivil(2026, 10, 21), "Time moves on to the next match day");
+    CareerStop next = career.Continue();
+    for (int guard = 0; guard < 20 && next.kind != "coach_game"; ++guard) {
+        if (next.kind == "player_question") career.AnswerQuestion(0);
+        next = career.Continue();
+    }
+    TEST_ASSERT(next.kind == "coach_game" && career.Today() > DaysFromCivil(2026, 10, 21), "Time moves on to the next match day (news and questions may come first)");
     g_testsPassed++;
 }
 
@@ -975,6 +982,51 @@ void TestManySeasonsStayConsistent() {
     }
     TEST_ASSERT(career.SeasonYear() == 2026 + seasons, "Every season rolled over");
     TEST_ASSERT(career.RetiredPlayerCount() >= 0 && career.FreeAgents().size() <= 200, "The free agent pool stays bounded");
+    g_testsPassed++;
+}
+
+void TestDayByDayAndEvents() {
+    std::cout << "[TEST] Career: the days pass one by one with injuries, questions, mood and box scores...\n";
+    auto league = CreateLeague(30, 41);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "7";
+    cfg.seed = 123;
+    career.Start(league, cfg);
+    TEST_ASSERT(career.FreeAgents().size() >= 40, "The league starts with free agents on the market");
+    career.UseGeneratedDraftClass();
+
+    int days = 0, games = 0, questions = 0, mostInjured = 0;
+    int previous = career.Today();
+    for (int guard = 0; guard < 400 && days < 110; ++guard) {
+        CareerStop stop = career.StepOne();
+        if (stop.kind == "day") {
+            TEST_ASSERT(career.Today() == previous + 1, "A step moves exactly one day");
+            previous = career.Today();
+            ++days;
+            int injured = 0;
+            for (const auto& t : league) for (const auto& p : t->roster) if (p->injured) ++injured;
+            mostInjured = std::max(mostInjured, injured);
+        } else if (stop.kind == "coach_game") {
+            ++games;
+            TEST_ASSERT(career.SimulateCoachGame(), "The assistant can play the stop");
+        } else if (stop.kind == "player_question") {
+            ++questions;
+            TEST_ASSERT(stop.blocking && stop.options.size() >= 2, "A question has answers");
+            TEST_ASSERT(career.AnswerQuestion(0), "A question can be answered");
+        }
+    }
+    TEST_ASSERT(days >= 100 && games >= 30, "Every one of the coach's games is a stop");
+    TEST_ASSERT(questions >= 1, "Players come with questions during the season");
+    TEST_ASSERT(mostInjured >= 1, "Players get injured");
+    TEST_ASSERT(career.GameRecords().size() == static_cast<size_t>(games), "Every played game has a box score");
+    const auto& record = career.GameRecords().front();
+    int points = 0;
+    for (const auto& l : record.home) points += l.points;
+    TEST_ASSERT(record.home.size() >= 8 && record.away.size() >= 8 && points >= record.homeScore * 8 / 10, "The box score lists the players and their points");
+    float mood = 0.0f;
+    for (const auto& p : career.UserTeam()->roster) mood += std::fabs(p->seasonMood);
+    TEST_ASSERT(mood > 0.1f, "Results move the players' mood");
     g_testsPassed++;
 }
 
@@ -1222,6 +1274,7 @@ int main() {
     TestRandomLeagueAndSavedCareer();
     TestSavedCareerResumesMidSeason();
     TestManySeasonsStayConsistent();
+    TestDayByDayAndEvents();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

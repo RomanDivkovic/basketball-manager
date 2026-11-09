@@ -126,7 +126,7 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
             p->blocksThisGame = 0;
             p->turnoversThisGame = 0;
             p->foulsThisGame = 0;
-            p->morale = 0.0f;
+            p->morale = p->seasonMood * 0.5f;
         }
 
         std::sort(sorted.begin(), sorted.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {

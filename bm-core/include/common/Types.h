@@ -76,6 +76,7 @@ struct Player {
     int turnoversThisGame;
     int foulsThisGame;
     float morale = 0.0f;    // -1 (furious) .. +1 (fired up); moved by team talks, fades over time
+    float seasonMood = 0.0f; // the same scale, built up over a season by results (CareerManager); half of it starts every match
 
     // Career: contract and age (maintained by CareerManager)
     int salary = 0;             // dollars per season
