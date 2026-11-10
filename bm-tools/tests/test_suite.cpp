@@ -4,6 +4,7 @@
 #include "db/DatabaseManager.h"
 #include "db/LeagueImport.h"
 #include "common/Types.h"
+#include "common/Ratings.h"
 #include <iostream>
 #include <random>
 #include <filesystem>
@@ -566,6 +567,8 @@ static void ScriptedCoach(CareerManager& c, const CareerStop& stop) {
         c.AnswerQuestion(0);
     } else if (stop.kind == "draft_class") {
         c.UseGeneratedDraftClass();
+    } else if (stop.kind == "friendlies_plan") {
+        c.PlanFriendlies({});
     } else if (stop.kind == "draft") {
         c.DraftAdvanceToUser();
         while (c.UserOnClock() && !c.Prospects().empty()) {
@@ -719,6 +722,8 @@ void TestCoachGameCanBePlayedLive() {
     CareerStop classStop = career.Continue();
     TEST_ASSERT(classStop.kind == "draft_class" && classStop.blocking, "A new season first asks about the draft class");
     career.UseGeneratedDraftClass();
+    TEST_ASSERT(career.Continue().kind == "friendlies_plan", "Then it asks about pre-season friendlies");
+    career.PlanFriendlies({});
     CareerStop stop = career.Continue();
     TEST_ASSERT(stop.kind == "coach_game" && stop.blocking, "The first stop is the coach's match");
     TEST_ASSERT(career.Continue().kind == "coach_game", "Time does not move past an unplayed match");
@@ -995,6 +1000,7 @@ void TestDayByDayAndEvents() {
     career.Start(league, cfg);
     TEST_ASSERT(career.FreeAgents().size() >= 40, "The league starts with free agents on the market");
     career.UseGeneratedDraftClass();
+    career.PlanFriendlies({});
 
     int days = 0, games = 0, questions = 0, mostInjured = 0;
     int previous = career.Today();
@@ -1049,6 +1055,7 @@ void TestCoachLineupAndMinutes() {
     cfg.seed = 31;
     career.Start(league, cfg);
     career.UseGeneratedDraftClass();
+    career.PlanFriendlies({});
 
     auto roster = career.UserTeam()->roster;
     std::sort(roster.begin(), roster.end(), [](const auto& a, const auto& b) { return a->attributes.currentAbility > b->attributes.currentAbility; });
@@ -1128,6 +1135,58 @@ void TestTraitsAndTrades() {
     TEST_ASSERT(movedMine && movedTheirs, "The players change clubs");
     auto unknown = career.Trade(other->teamId, {"nobody"}, {}, false);
     TEST_ASSERT(!unknown.valid, "A player who is not on the roster cannot be traded");
+    g_testsPassed++;
+}
+
+void TestFriendliesStaffAndOpenLeague() {
+    std::cout << "[TEST] Friendlies, staff tasks, club honours and the open league...\n";
+    auto league = CreateLeague(30, 91);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "1";
+    cfg.seed = 12;
+    career.Start(league, cfg);
+
+    CareerStop stop;
+    for (int i = 0; i < 12; ++i) {
+        stop = career.StepOne();
+        if (stop.kind == "draft_class") career.UseGeneratedDraftClass();
+        if (stop.kind == "friendlies_plan") break;
+    }
+    TEST_ASSERT(stop.kind == "friendlies_plan" && stop.blocking, "The coach is asked about pre-season friendlies");
+    TEST_ASSERT(career.PlanFriendlies({"2", "3", "4", "5", "6", "7", "1"}) && career.Friendlies().size() == 5, "At most five friendlies against other clubs are planned");
+    TEST_ASSERT(career.PlanFriendlies({"2", "3", "4"}) && career.Friendlies().size() == 3, "The plan can be changed before the first game");
+
+    career.SetStaff(CareerManager::TASK_DEVELOPMENT | CareerManager::TASK_CONTRACTS, "bigs", 2, 3);
+    TEST_ASSERT(career.StaffTasks() == 10 && career.ScoutFocus() == "bigs" && career.StaffOffense() == 2 && career.StaffDefense() == 3, "The staff settings are stored");
+
+    int coachGames = 0;
+    for (int i = 0; i < 40 && career.Phase() == CareerPhase::Preseason; ++i) {
+        stop = career.StepOne();
+        if (stop.kind == "coach_game") { ++coachGames; career.SimulateCoachGame(); }
+        if (stop.kind == "roster_check") career.AssistantFillRoster();
+    }
+    TEST_ASSERT(coachGames == 3, "The coach plays his three friendlies himself");
+    int played = 0;
+    for (const auto& g : career.Friendlies()) if (g.played) ++played;
+    TEST_ASSERT(played == 3 && career.Phase() == CareerPhase::RegularSeason, "All friendlies are played before opening night");
+
+    career.Vacation("season_end");
+    int titles = 0;
+    for (const auto& t : league) titles += career.HonorsOf(t->teamId).titles;
+    TEST_ASSERT(titles == 1, "One club has the title after the Finals");
+    int finalists = 0;
+    for (const auto& t : league) finalists += career.HonorsOf(t->teamId).finals;
+    TEST_ASSERT(finalists == 2, "Two clubs reached the Finals");
+
+    auto player = league[0]->roster[0];
+    CareerManager::PlayerEdit edit{15, 14, 13, 12, 11, 10, 77, 85, player->salary, player->contractEndYear, bm::TRAIT_SHARPSHOOTER};
+    std::string message;
+    TEST_ASSERT(!career.EditPlayer(player->playerId, edit, &message), "A closed league does not allow edits");
+    career.SetOpenLeague(true);
+    TEST_ASSERT(career.EditPlayer(player->playerId, edit, &message), "An open league allows edits");
+    TEST_ASSERT(player->attributes.currentAbility == 77 && player->attributes.potentialAbility == 85 && player->traits == bm::TRAIT_SHARPSHOOTER && player->attributes.shooting == 14, "The edit changes the player");
+    TEST_ASSERT(bm::DetailedRatings(*player).size() > 20, "A player has detailed ratings");
     g_testsPassed++;
 }
 
@@ -1378,6 +1437,7 @@ int main() {
     TestDayByDayAndEvents();
     TestCoachLineupAndMinutes();
     TestTraitsAndTrades();
+    TestFriendliesStaffAndOpenLeague();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

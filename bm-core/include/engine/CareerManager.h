@@ -221,6 +221,42 @@ public:
         double getValue = 0.0;     // what he asks for
         std::string message;
     };
+    // ---- pre-season friendlies ----
+    struct FriendlyGame {
+        int day = 0;
+        std::shared_ptr<Team> home;
+        std::shared_ptr<Team> away;
+        bool played = false;
+        int homeScore = 0, awayScore = 0;
+    };
+    bool FriendliesPlanned() const { return friendliesPlanned; }
+    const std::vector<FriendlyGame>& Friendlies() const { return friendlies; }
+    bool PlanFriendlies(const std::vector<std::string>& opponentIds);   // 0 to 5 clubs, one game each
+
+    // ---- staff: what the assistant takes care of, scouting focus and the coaches' schemes ----
+    enum StaffTask { TASK_FRIENDLIES = 1, TASK_DEVELOPMENT = 2, TASK_SCOUTING = 4, TASK_CONTRACTS = 8 };
+    int StaffTasks() const { return staffTasks; }
+    const std::string& ScoutFocus() const { return scoutFocus; }
+    int StaffOffense() const { return staffOffense; }
+    int StaffDefense() const { return staffDefense; }
+    void SetStaff(int tasks, const std::string& focus, int offense, int defense);
+    struct InjuryInfo { std::shared_ptr<Player> player; int backDay = 0; };
+    std::vector<InjuryInfo> UserInjuries() const;
+
+    // ---- club history, and the open/closed league ----
+    struct TeamHonors { int titles = 0, finals = 0, conferenceTitles = 0; };
+    TeamHonors HonorsOf(const std::string& teamId) const;
+    bool OpenLeague() const { return openLeague; }
+    void SetOpenLeague(bool open) { openLeague = open; }
+    struct PlayerEdit {
+        int pace, shooting, ballControl, defense, physical, technical;   // 1..20
+        int ability, potential;                                          // 40..99
+        int salary, contractEnd;
+        unsigned traits;
+    };
+    bool EditPlayer(const std::string& playerId, const PlayerEdit& edit, std::string* message);   // open leagues only
+    std::shared_ptr<Player> FindPlayer(const std::string& playerId) const;
+
     bool TradesOpen() const;
     TradeResult Trade(const std::string& teamId, const std::vector<std::string>& giveIds, const std::vector<std::string>& getIds, bool execute);
     const std::vector<std::shared_ptr<Player>>& FreeAgents() const { return freeAgents; }
@@ -349,6 +385,17 @@ private:
     std::vector<std::string> userStarters;
     std::map<std::string, std::vector<SeasonStatRecord>> statHistory;
     void ArchiveSeasonStats();
+    std::vector<FriendlyGame> friendlies;
+    bool friendliesPlanned = false;
+    int staffTasks = 0;
+    std::string scoutFocus = "best";
+    int staffOffense = -1;   // -1 = not chosen: the club's own scheme
+    int staffDefense = -1;
+    std::map<std::string, TeamHonors> honors;
+    bool openLeague = false;
+    void AssistantPlanFriendlies();
+    void AssistantRenewContracts();
+    void RecordHonors();
     void AwardTraits();                       // rare badges for players with the attributes and the seasons to back them up
     std::map<std::string, int> userMinutes;
     void PushLineup();
