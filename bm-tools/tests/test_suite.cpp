@@ -1027,6 +1027,60 @@ void TestDayByDayAndEvents() {
     float mood = 0.0f;
     for (const auto& p : career.UserTeam()->roster) mood += std::fabs(p->seasonMood);
     TEST_ASSERT(mood > 0.1f, "Results move the players' mood");
+
+    // Season statistics for every player, archived when the Finals are over
+    int withStats = 0;
+    for (const auto& t : league) for (const auto& p : t->roster) if (p->seasonStats[0].games > 5.0f && p->seasonStats[0].points > 0) ++withStats;
+    TEST_ASSERT(withStats >= 200, "Players across the league build up season statistics");
+    career.Vacation("season_end");
+    TEST_ASSERT(!career.StatHistory().empty(), "The season goes into the players' history");
+    bool hasPlayoffs = false;
+    for (const auto& kv : career.StatHistory()) for (const auto& r : kv.second) if (r.kind == 1) hasPlayoffs = true;
+    TEST_ASSERT(hasPlayoffs, "Playoff statistics are kept apart from the regular season");
+    g_testsPassed++;
+}
+
+void TestCoachLineupAndMinutes() {
+    std::cout << "[TEST] Career: the coach picks the starting five and the minutes...\n";
+    auto league = CreateLeague(30, 51);
+    CareerManager career;
+    CareerManager::Config cfg;
+    cfg.userTeamId = "9";
+    cfg.seed = 31;
+    career.Start(league, cfg);
+    career.UseGeneratedDraftClass();
+
+    auto roster = career.UserTeam()->roster;
+    std::sort(roster.begin(), roster.end(), [](const auto& a, const auto& b) { return a->attributes.currentAbility > b->attributes.currentAbility; });
+    const auto star = roster.front();
+    std::vector<std::string> starters;
+    std::map<std::string, int> minutes;
+    for (size_t i = roster.size() - 1; starters.size() < 5; --i) {   // the five weakest start
+        starters.push_back(roster[i]->playerId);
+        minutes[roster[i]->playerId] = 40;
+    }
+    minutes[star->playerId] = 0;
+    TEST_ASSERT(career.SetLineup(starters, minutes), "The lineup is accepted");
+    TEST_ASSERT(career.UserStarters().size() == 5, "Five starters are stored");
+
+    for (int guard = 0; guard < 300; ++guard) {
+        CareerStop stop = career.StepOne();
+        if (stop.kind == "player_question") career.AnswerQuestion(0);
+        if (stop.kind == "coach_game") { career.SimulateCoachGame(); break; }
+    }
+    TEST_ASSERT(!career.GameRecords().empty(), "A game was played");
+    const auto& record = career.GameRecords().front();
+    const auto& mine = record.userHome ? record.home : record.away;
+    int starterMinutes = 0;
+    bool starPlayed = false;
+    for (const auto& line : mine) {
+        if (line.name == star->firstName + " " + star->lastName) starPlayed = line.minutes > 0;
+        for (const auto& id : starters) {
+            for (const auto& p : roster) if (p->playerId == id && line.name == p->firstName + " " + p->lastName) starterMinutes += line.minutes;
+        }
+    }
+    TEST_ASSERT(!starPlayed, "A player with zero minutes stays on the bench");
+    TEST_ASSERT(starterMinutes >= 120, "The coach's starters carry the game");
     g_testsPassed++;
 }
 
@@ -1275,6 +1329,7 @@ int main() {
     TestSavedCareerResumesMidSeason();
     TestManySeasonsStayConsistent();
     TestDayByDayAndEvents();
+    TestCoachLineupAndMinutes();
     TestProgressionFollowsAge();
     TestCustomLeagueFiles();
 

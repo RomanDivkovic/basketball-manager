@@ -368,19 +368,50 @@ void SeasonManager::SetQuiet(bool value) {
 void SeasonManager::SimulateGameInPlace(Game& game) {
     CoutSilencer silence(quiet);
     matchEngine->SetPauseEnabled(false);
+    auto lineupFor = [&](bool home, const std::shared_ptr<Team>& team) {
+        auto it = teamLineups.find(team->teamId);
+        if (it != teamLineups.end()) matchEngine->SetLineupOverride(home, it->second.starters, it->second.minutes);
+        else matchEngine->SetLineupOverride(home, {}, {});
+    };
+    lineupFor(true, game.homeTeam);
+    lineupFor(false, game.awayTeam);
     matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
     matchEngine->SimulateFullMatch();
     auto state = matchEngine->GetMatchState();
     game.homeScore = state->homeScore;
     game.awayScore = state->awayScore;
     game.played = true;
+    if (recordStats) {
+        const bool playoffs = playoffsGenerated && currentPlayoffRound >= 1;   // the Play-In counts as regular season
+        AddPlayerGameStats(game.homeTeam, playoffs);
+        AddPlayerGameStats(game.awayTeam, playoffs);
+    }
+}
+
+void SeasonManager::AddPlayerGameStats(const std::shared_ptr<Team>& team, bool playoffs) {
+    if (!team) return;
+    for (const auto& p : team->roster) {
+        if (p->minutesPlayedThisGame <= 0.0f && p->pointsThisGame == 0 && p->reboundsThisGame == 0 && p->assistsThisGame == 0) continue;
+        SeasonTotals& s = p->seasonStats[playoffs ? 1 : 0];
+        s.games += 1.0f;
+        s.minutes += p->minutesPlayedThisGame;
+        s.points += p->pointsThisGame;
+        s.rebounds += p->reboundsThisGame;
+        s.assists += p->assistsThisGame;
+        s.steals += p->stealsThisGame;
+        s.blocks += p->blocksThisGame;
+        s.turnovers += p->turnoversThisGame;
+        s.fouls += p->foulsThisGame;
+    }
 }
 
 std::pair<int, int> SeasonManager::PlayStandaloneGame(const std::shared_ptr<Team>& home, const std::shared_ptr<Team>& away) {
     Game game;
     game.homeTeam = home;
     game.awayTeam = away;
+    recordStats = false;   // Summer League and friendlies do not count in the season totals
     SimulateGameInPlace(game);
+    recordStats = true;
     return {game.homeScore, game.awayScore};
 }
 

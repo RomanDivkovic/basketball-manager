@@ -267,6 +267,25 @@ int TacticalManager::GetPlayerMinutesOnCourt(std::shared_ptr<Player> player) con
 void TacticalManager::BuildMinutePlan(std::shared_ptr<Team> team, bool isHomeTeam) {
     if (!team) return;
 
+    // The coach's own minute targets (scaled to a 240-minute game; injured players get none)
+    const auto& manual = isHomeTeam ? homeMinuteOverride : awayMinuteOverride;
+    if (!manual.empty()) {
+        auto& chosen = isHomeTeam ? homeMinutePlan : awayMinutePlan;
+        chosen.clear();
+        int total = 0;
+        for (const auto& p : team->roster) {
+            auto it = manual.find(p->playerId);
+            const int minutes = (it != manual.end() && !p->injured && p->active) ? std::max(0, it->second) : 0;
+            chosen[p->playerId] = minutes;
+            total += minutes;
+        }
+        if (total > 0 && total != 240) {
+            for (auto& kv : chosen) kv.second = static_cast<int>(std::lround(kv.second * 240.0 / total));
+        }
+        if (total > 0) return;
+        chosen.clear();
+    }
+
     // Sort roster by ability descending
     std::vector<std::shared_ptr<Player>> sorted = team->roster;
     std::sort(sorted.begin(), sorted.end(), [](const std::shared_ptr<Player>& a, const std::shared_ptr<Player>& b) {

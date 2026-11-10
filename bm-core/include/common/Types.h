@@ -32,6 +32,13 @@ struct PlayerAttributes {
     int potentialAbility; // Future potential (0-100)
 };
 
+// Totals over a season (regular season or playoffs)
+struct SeasonTotals {
+    float games = 0.0f;
+    float minutes = 0.0f;
+    int points = 0, rebounds = 0, assists = 0, steals = 0, blocks = 0, turnovers = 0, fouls = 0;
+};
+
 // Player structure
 struct Player {
     std::string playerId;
@@ -76,6 +83,7 @@ struct Player {
     int turnoversThisGame;
     int foulsThisGame;
     float morale = 0.0f;    // -1 (furious) .. +1 (fired up); moved by team talks, fades over time
+    SeasonTotals seasonStats[2];  // [0] regular season, [1] playoffs; kept by SeasonManager and CareerManager
     float seasonMood = 0.0f; // the same scale, built up over a season by results (CareerManager); half of it starts every match
 
     // Career: contract and age (maintained by CareerManager)

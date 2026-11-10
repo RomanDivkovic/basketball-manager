@@ -135,6 +135,8 @@ void CareerManager::Start(const std::vector<std::shared_ptr<Team>>& teamList, co
     lastQuestionDay = 0;
     injuredUntil.clear();
     gameRecords.clear();
+    userStarters.clear();
+    userMinutes.clear();
     winStreak = lossStreak = lastUserWins = lastUserLosses = 0;
     draftResults.clear();
     draftDone = false;
@@ -391,10 +393,15 @@ bool CareerManager::RecordCoachGame(int homeScore, int awayScore) {
     CoachGameInfo game = PendingCoachGame();
     if (!game.pending) return false;
     if (game.kind == "regular") {
+        season.AddPlayerGameStats(game.home, false);
+        season.AddPlayerGameStats(game.away, false);
         CaptureBox(RegularSeasonDay(), game.label, "regular", game.home, game.away, homeScore, awayScore);
         return season.RecordResult(RegularSeasonDay(), game.home->teamId, game.away->teamId, homeScore, awayScore);
     }
     if (game.kind == "playin" || game.kind == "playoff") {
+        const bool playoffGame = game.kind == "playoff";
+        season.AddPlayerGameStats(game.home, playoffGame);
+        season.AddPlayerGameStats(game.away, playoffGame);
         const bool ok = season.RecordPlayoffGame(game.seriesId, homeScore, awayScore);
         const size_t count = season.GetPlayoffBracket().size();
         if (season.GetCurrentPlayoffRound() != lastRound || count != lastSeriesCount) {
@@ -734,6 +741,7 @@ void CareerManager::EndPlayoffs() {
     }
     seasonCounted = true;
     if (season.GetChampion() && season.GetChampion()->teamId == userTeamId) ++titlesWon;
+    ArchiveSeasonStats();
     PrepareDraft();
 }
 
@@ -806,9 +814,11 @@ void CareerManager::RollOverSeason() {
             p->onCourt = false;
             p->injured = false;
             p->seasonMood *= 0.3f;
+            p->seasonStats[0] = SeasonTotals();
+            p->seasonStats[1] = SeasonTotals();
         }
     }
-    for (const auto& p : freeAgents) p->age = seasonYear - BirthYearOf(*p);
+    for (const auto& p : freeAgents) { p->age = seasonYear - BirthYearOf(*p); p->seasonStats[0] = SeasonTotals(); p->seasonStats[1] = SeasonTotals(); }
     PruneFreeAgents();
     injuredUntil.clear();
     winStreak = lossStreak = lastUserWins = lastUserLosses = 0;
@@ -1869,6 +1879,48 @@ bool CareerManager::AnswerQuestion(int option) {
     return true;
 }
 
+// Called when the Finals are over: every player's season goes into his history with the club he played for
+void CareerManager::ArchiveSeasonStats() {
+    for (const auto& t : teams) {
+        for (const auto& p : t->roster) {
+            for (int kind = 0; kind < 2; ++kind) {
+                if (p->seasonStats[kind].games <= 0.0f) continue;
+                auto& history = statHistory[p->playerId];
+                history.erase(std::remove_if(history.begin(), history.end(), [&](const SeasonStatRecord& r) { return r.season == seasonYear && r.kind == kind; }), history.end());
+                SeasonStatRecord record;
+                record.season = seasonYear;
+                record.team = t->name;
+                record.kind = kind;
+                record.line = p->seasonStats[kind];
+                history.push_back(record);
+            }
+        }
+    }
+}
+
+bool CareerManager::SetLineup(const std::vector<std::string>& starters, const std::map<std::string, int>& minutes) {
+    auto team = FindTeam(userTeamId);
+    if (!team) return false;
+    std::set<std::string> onRoster;
+    for (const auto& p : team->roster) onRoster.insert(p->playerId);
+    std::vector<std::string> chosen;
+    for (const auto& id : starters) {
+        if (onRoster.count(id) && std::find(chosen.begin(), chosen.end(), id) == chosen.end() && chosen.size() < 5) chosen.push_back(id);
+    }
+    std::map<std::string, int> kept;
+    for (const auto& kv : minutes) if (onRoster.count(kv.first)) kept[kv.first] = std::clamp(kv.second, 0, 48);
+    userStarters = chosen;
+    userMinutes = kept;
+    PushLineup();
+    return true;
+}
+
+// Hands the coach's choices to the season simulation, which also plays the coach's games the assistant takes
+void CareerManager::PushLineup() {
+    std::unordered_map<std::string, int> minutes(userMinutes.begin(), userMinutes.end());
+    season.SetTeamLineup(userTeamId, userStarters, minutes);
+}
+
 // The league starts with unsigned players on the market so the first season already has free agency
 void CareerManager::GenerateStartingFreeAgents(int count) {
     for (int i = 0; i < count; ++i) {
@@ -1901,6 +1953,7 @@ void CareerManager::CaptureBox(int day, const std::string& label, const std::str
         for (const auto& p : team->roster) {
             if (p->minutesPlayedThisGame <= 0.0f && p->pointsThisGame == 0 && p->reboundsThisGame == 0 && p->assistsThisGame == 0) continue;
             BoxLine l;
+            l.id = p->playerId;
             l.name = FullName(*p);
             l.position = kPositions[std::clamp(static_cast<int>(p->position), 0, 4)];
             l.minutes = static_cast<int>(std::lround(p->minutesPlayedThisGame));
@@ -1960,7 +2013,7 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
     sqlite3_busy_timeout(db, 3000);
     if (!Exec(db, "BEGIN IMMEDIATE;"
         "DROP TABLE IF EXISTS career_state; DROP TABLE IF EXISTS career_players; DROP TABLE IF EXISTS career_records;"
-        "DROP TABLE IF EXISTS career_hall; DROP TABLE IF EXISTS career_retired; DROP TABLE IF EXISTS career_results; DROP TABLE IF EXISTS career_lists; DROP TABLE IF EXISTS career_games;"
+        "DROP TABLE IF EXISTS career_hall; DROP TABLE IF EXISTS career_retired; DROP TABLE IF EXISTS career_results; DROP TABLE IF EXISTS career_lists; DROP TABLE IF EXISTS career_games; DROP TABLE IF EXISTS career_stats;"
         "CREATE TABLE career_state (key TEXT PRIMARY KEY, value TEXT);"
         "CREATE TABLE career_players (player_id TEXT PRIMARY KEY, team_id TEXT, sort_order INTEGER, first_name TEXT, last_name TEXT,"
         " position INTEGER, height REAL, weight REAL, birth_date TEXT, jersey INTEGER, pace INTEGER, shooting INTEGER, ball_control INTEGER,"
@@ -1970,7 +2023,8 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         "CREATE TABLE career_hall (player_id TEXT, name TEXT, position TEXT, team_name TEXT, year INTEGER, peak INTEGER, seasons INTEGER, number INTEGER, number_retired INTEGER);"
         "CREATE TABLE career_retired (team_id TEXT, team_name TEXT, player_name TEXT, number INTEGER, year INTEGER);"
         "CREATE TABLE career_results (day INTEGER, home TEXT, away TEXT, home_score INTEGER, away_score INTEGER);"
-        "CREATE TABLE career_lists (kind TEXT, idx INTEGER, value TEXT);", error)) {
+        "CREATE TABLE career_lists (kind TEXT, idx INTEGER, value TEXT);"
+        "CREATE TABLE career_stats (player_id TEXT, season INTEGER, team TEXT, kind INTEGER, current INTEGER, g REAL, min REAL, pts INTEGER, reb INTEGER, ast INTEGER, stl INTEGER, blk INTEGER, tov INTEGER, pf INTEGER);", error)) {
         Exec(db, "ROLLBACK;", nullptr);
         return false;
     }
@@ -2092,7 +2146,32 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
             }
         };
         list("draft_order", draftOrder);
+        list("starters", userStarters);
+        {
+            std::vector<std::string> minuteItems;
+            for (const auto& kv : userMinutes) minuteItems.push_back(kv.first + "=" + std::to_string(kv.second));
+            list("minutes", minuteItems);
+        }
         list("rookies", std::vector<std::string>(rookies.begin(), rookies.end()));
+        sqlite3_finalize(st);
+    }
+    if (auto st = prepare("INSERT INTO career_stats VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+        auto write = [&](const std::string& id, int season, const std::string& team, int kind, int current, const SeasonTotals& s) {
+            sqlite3_reset(st);
+            text(st, 1, id); sqlite3_bind_int(st, 2, season); text(st, 3, team); sqlite3_bind_int(st, 4, kind); sqlite3_bind_int(st, 5, current);
+            sqlite3_bind_double(st, 6, s.games); sqlite3_bind_double(st, 7, s.minutes);
+            sqlite3_bind_int(st, 8, s.points); sqlite3_bind_int(st, 9, s.rebounds); sqlite3_bind_int(st, 10, s.assists);
+            sqlite3_bind_int(st, 11, s.steals); sqlite3_bind_int(st, 12, s.blocks); sqlite3_bind_int(st, 13, s.turnovers); sqlite3_bind_int(st, 14, s.fouls);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        };
+        for (const auto& t : teams) {
+            for (const auto& p : t->roster) {
+                for (int kind = 0; kind < 2; ++kind) if (p->seasonStats[kind].games > 0.0f) write(p->playerId, seasonYear, t->name, kind, 1, p->seasonStats[kind]);
+            }
+        }
+        for (const auto& kv : statHistory) {
+            for (const auto& r : kv.second) write(kv.first, r.season, r.team, r.kind, 0, r.line);
+        }
         sqlite3_finalize(st);
     }
     if (auto st = prepare("INSERT INTO career_games VALUES (?,?,?,?,?,?,?,?,?,?,?)")) {
@@ -2200,6 +2279,28 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
         }
         sqlite3_finalize(st);
     }
+    statHistory.clear();
+    if (sqlite3_prepare_v2(db, "SELECT player_id, season, team, kind, current, g, min, pts, reb, ast, stl, blk, tov, pf FROM career_stats", -1, &st, nullptr) == SQLITE_OK) {
+        std::map<std::string, std::shared_ptr<Player>> byPlayer;
+        for (const auto& t : teams) for (const auto& p : t->roster) byPlayer[p->playerId] = p;
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            SeasonTotals totals;
+            totals.games = static_cast<float>(sqlite3_column_double(st, 5)); totals.minutes = static_cast<float>(sqlite3_column_double(st, 6));
+            totals.points = sqlite3_column_int(st, 7); totals.rebounds = sqlite3_column_int(st, 8); totals.assists = sqlite3_column_int(st, 9);
+            totals.steals = sqlite3_column_int(st, 10); totals.blocks = sqlite3_column_int(st, 11); totals.turnovers = sqlite3_column_int(st, 12); totals.fouls = sqlite3_column_int(st, 13);
+            const std::string id = ColumnText(st, 0);
+            const int kind = std::clamp(sqlite3_column_int(st, 3), 0, 1);
+            if (sqlite3_column_int(st, 4) != 0) {
+                auto found = byPlayer.find(id);
+                if (found != byPlayer.end()) found->second->seasonStats[kind] = totals;
+            } else {
+                SeasonStatRecord r;
+                r.season = sqlite3_column_int(st, 1); r.team = ColumnText(st, 2); r.kind = kind; r.line = totals;
+                statHistory[id].push_back(r);
+            }
+        }
+        sqlite3_finalize(st);
+    }
     gameRecords.clear();
     if (sqlite3_prepare_v2(db, "SELECT season, day, date, kind, label, home_name, away_name, user_home, home_score, away_score, box FROM career_games", -1, &st, nullptr) == SQLITE_OK) {
         auto parse = [](const std::string& text) {
@@ -2284,10 +2385,18 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     draftOrder.clear();
     draftResults.clear();
     rookies.clear();
+    userStarters.clear();
+    userMinutes.clear();
     if (sqlite3_prepare_v2(db, "SELECT kind, value FROM career_lists ORDER BY kind, idx", -1, &st, nullptr) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             const std::string kind = ColumnText(st, 0);
             if (kind == "draft_order") draftOrder.push_back(ColumnText(st, 1));
+            else if (kind == "starters") userStarters.push_back(ColumnText(st, 1));
+            else if (kind == "minutes") {
+                const std::string item = ColumnText(st, 1);
+                const size_t eq = item.find('=');
+                if (eq != std::string::npos) userMinutes[item.substr(0, eq)] = std::atoi(item.c_str() + eq + 1);
+            }
             else if (kind == "rookies") rookies.insert(ColumnText(st, 1));
         }
         sqlite3_finalize(st);
@@ -2306,6 +2415,7 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     season.InitializeSeason(seasonYear, "NBA");
     season.LoadTeams(teams);
     season.GenerateSchedule();
+    PushLineup();
     if (sqlite3_prepare_v2(db, "SELECT day, home, away, home_score, away_score FROM career_results ORDER BY day", -1, &st, nullptr) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             season.RecordResult(sqlite3_column_int(st, 0), ColumnText(st, 1), ColumnText(st, 2), sqlite3_column_int(st, 3), sqlite3_column_int(st, 4));

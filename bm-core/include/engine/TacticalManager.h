@@ -54,6 +54,7 @@ enum class SubstitutionMode {
  */
 class TacticalManager {
 public:
+    void SetMinuteOverride(bool isHomeTeam, const std::unordered_map<std::string, int>& minutes) { (isHomeTeam ? homeMinuteOverride : awayMinuteOverride) = minutes; }
     TacticalManager();
     ~TacticalManager();
 
@@ -154,6 +155,8 @@ private:
     int minMinutesBeforeSub;       // Default: 3 minutes
 
     std::unordered_map<std::string, int> homeMinutePlan;
+    std::unordered_map<std::string, int> homeMinuteOverride;   // the coach's own minute targets (empty = automatic)
+    std::unordered_map<std::string, int> awayMinuteOverride;
     std::unordered_map<std::string, int> awayMinutePlan;
 
     std::vector<std::string> substitutionLogs;

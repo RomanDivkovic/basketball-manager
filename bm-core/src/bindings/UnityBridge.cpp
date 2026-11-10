@@ -604,6 +604,10 @@ void InitializeMatch(const char* homeTeamId, const char* awayTeamId) {
     }
     matchEngine = std::make_unique<bm::engine::MatchEngine>();
     matchEngine->SetHeadless(true);
+    {
+        std::unordered_map<std::string, int> minutes(career->UserMinutes().begin(), career->UserMinutes().end());
+        matchEngine->SetLineupOverride(true, career->UserStarters(), minutes);   // the coach's team is always the engine's home side
+    }
     matchEngine->InitializeMatch(homeTeam, awayTeam);
     matchEngine->SetBreaksEnabled(true);
     UpdateStateJson();
@@ -1111,6 +1115,8 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"contractEnd\":" << p->contractEndYear
              << ",\"stamina\":" << stamina
              << ",\"onCourt\":" << (p->onCourt ? "true" : "false")
+             << ",\"starter\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && std::find(career->UserStarters().begin(), career->UserStarters().end(), p->playerId) != career->UserStarters().end()) ? "true" : "false")
+             << ",\"minutes\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && career->UserMinutes().count(p->playerId)) ? career->UserMinutes().at(p->playerId) : -1)
              << ",\"injured\":" << (p->injured ? "true" : "false")
              << ",\"mood\":" << std::fixed << std::setprecision(2) << p->seasonMood
              << "}";
@@ -1383,6 +1389,23 @@ const char* CareerStepDay() {
     return careerStopJson.c_str();
 }
 
+// startersCsv: "id,id,id,id,id"; minutesCsv: "id:minutes;id:minutes" (empty = automatic)
+int CareerSetLineup(const char* startersCsv, const char* minutesCsv) {
+    if (!career) return 0;
+    std::vector<std::string> starters;
+    std::map<std::string, int> minutes;
+    std::string text = startersCsv ? startersCsv : "";
+    std::stringstream a(text);
+    std::string item;
+    while (std::getline(a, item, ',')) if (!item.empty()) starters.push_back(item);
+    std::stringstream b(minutesCsv ? minutesCsv : "");
+    while (std::getline(b, item, ';')) {
+        const size_t colon = item.find(':');
+        if (colon != std::string::npos) minutes[item.substr(0, colon)] = std::atoi(item.c_str() + colon + 1);
+    }
+    return career->SetLineup(starters, minutes) ? 1 : 0;
+}
+
 int CareerAnswerQuestion(int option) {
     if (!career || !career->AnswerQuestion(option)) return 0;
     careerLastStop = bm::engine::CareerStop();
@@ -1391,6 +1414,55 @@ int CareerAnswerQuestion(int option) {
 }
 
 static std::string boxScoreJson;
+static std::string playerProfileJson;
+
+static std::string TotalsJson(const bm::SeasonTotals& s) {
+    std::ostringstream out;
+    out << "\"g\":" << static_cast<int>(s.games) << ",\"min\":" << static_cast<int>(s.minutes) << ",\"pts\":" << s.points << ",\"reb\":" << s.rebounds
+        << ",\"ast\":" << s.assists << ",\"stl\":" << s.steals << ",\"blk\":" << s.blocks << ",\"tov\":" << s.turnovers << ",\"pf\":" << s.fouls;
+    return out.str();
+}
+
+// One player for the profile screen: details, contract, status and season-by-season statistics
+const char* CareerGetPlayerJson(const char* playerId) {
+    if (!career || !playerId) { playerProfileJson = "{\"found\":false}"; return playerProfileJson.c_str(); }
+    std::shared_ptr<bm::Player> player;
+    std::string teamName = "Free agent";
+    std::string teamId;
+    for (const auto& t : career->Teams()) {
+        for (const auto& p : t->roster) if (p->playerId == playerId) { player = p; teamName = t->name; teamId = t->teamId; }
+    }
+    if (!player) for (const auto& p : career->FreeAgents()) if (p->playerId == playerId) player = p;
+    if (!player) for (const auto& p : career->Prospects()) if (p->playerId == playerId) { player = p; teamName = "Draft prospect"; }
+    if (!player) { playerProfileJson = "{\"found\":false}"; return playerProfileJson.c_str(); }
+    const bool mine = !teamId.empty() && teamId == career->UserTeamId();
+    std::ostringstream json;
+    json << "{\"found\":true,\"id\":\"" << EscapeJson(player->playerId) << "\",\"name\":\"" << EscapeJson(player->firstName + " " + player->lastName)
+         << "\",\"pos\":\"" << PositionToStr(player->position) << "\",\"jersey\":" << player->jerseyNumber << ",\"team\":\"" << EscapeJson(teamName)
+         << "\",\"mine\":" << (mine ? "true" : "false") << ",\"age\":" << player->age << ",\"height\":" << std::fixed << std::setprecision(2) << player->height
+         << ",\"weight\":" << std::setprecision(0) << player->weight << ",\"rating\":" << player->attributes.currentAbility
+         << ",\"potential\":" << player->attributes.potentialAbility << ",\"pace\":" << player->attributes.pace << ",\"shooting\":" << player->attributes.shooting
+         << ",\"ballControl\":" << player->attributes.ballControl << ",\"defense\":" << player->attributes.defense << ",\"physical\":" << player->attributes.physical
+         << ",\"technical\":" << player->attributes.technical << ",\"salary\":" << player->salary << ",\"endYear\":" << player->contractEndYear
+         << ",\"injured\":" << (player->injured ? "true" : "false") << ",\"mood\":" << std::setprecision(2) << player->seasonMood << ",\"seasons\":[";
+    bool first = true;
+    auto add = [&](int season, const std::string& team, int kind, const bm::SeasonTotals& s) {
+        json << (first ? "" : ",") << "{\"season\":" << season << ",\"team\":\"" << EscapeJson(team) << "\",\"kind\":" << kind << "," << TotalsJson(s) << "}";
+        first = false;
+    };
+    if (!career->SeasonCounted()) {   // this season is still being played; afterwards it is in the history
+        for (int kind = 0; kind < 2; ++kind) if (player->seasonStats[kind].games > 0.0f) add(career->SeasonYear(), teamName, kind, player->seasonStats[kind]);
+    }
+    auto history = career->StatHistory().find(playerId);
+    if (history != career->StatHistory().end()) {
+        std::vector<bm::engine::SeasonStatRecord> rows = history->second;
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.season != b.season ? a.season > b.season : a.kind < b.kind; });
+        for (const auto& r : rows) add(r.season, r.team, r.kind, r.line);
+    }
+    json << "]}";
+    playerProfileJson = json.str();
+    return playerProfileJson.c_str();
+}
 
 const char* CareerGetBoxScoreJson(int day) {
     const bm::engine::GameRecord* r = career ? career->FindGameRecord(career->SeasonYear(), day) : nullptr;
@@ -1400,7 +1472,7 @@ const char* CareerGetBoxScoreJson(int day) {
         out << "[";
         for (size_t i = 0; i < lines.size(); ++i) {
             const auto& l = lines[i];
-            out << (i ? "," : "") << "{\"name\":\"" << EscapeJson(l.name) << "\",\"pos\":\"" << l.position << "\",\"min\":" << l.minutes
+            out << (i ? "," : "") << "{\"id\":\"" << EscapeJson(l.id) << "\",\"name\":\"" << EscapeJson(l.name) << "\",\"pos\":\"" << l.position << "\",\"min\":" << l.minutes
                 << ",\"pts\":" << l.points << ",\"reb\":" << l.rebounds << ",\"ast\":" << l.assists << ",\"stl\":" << l.steals
                 << ",\"blk\":" << l.blocks << ",\"tov\":" << l.turnovers << ",\"pf\":" << l.fouls << "}";
         }

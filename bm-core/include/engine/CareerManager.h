@@ -50,8 +50,16 @@ struct CareerStop {
     std::string playerId;               // the player a question or news item is about
 };
 
+// One finished season of a player (kind 0 regular season, 1 playoffs)
+struct SeasonStatRecord {
+    int season = 0;
+    std::string team;
+    int kind = 0;
+    SeasonTotals line;
+};
+
 struct BoxLine {
-    std::string name, position;
+    std::string id, name, position;
     int minutes = 0, points = 0, rebounds = 0, assists = 0, steals = 0, blocks = 0, turnovers = 0, fouls = 0;
 };
 
@@ -153,6 +161,11 @@ public:
     bool AnswerQuestion(int option);          // the coach's answer to a player question
     const std::vector<GameRecord>& GameRecords() const { return gameRecords; }
     const GameRecord* FindGameRecord(int season, int day) const;
+    // The coach's starting five and minute targets (empty = the assistant picks)
+    bool SetLineup(const std::vector<std::string>& starters, const std::map<std::string, int>& minutes);
+    const std::vector<std::string>& UserStarters() const { return userStarters; }
+    const std::map<std::string, int>& UserMinutes() const { return userMinutes; }
+    const std::map<std::string, std::vector<SeasonStatRecord>>& StatHistory() const { return statHistory; }
     int WinStreak() const { return winStreak; }
     int LossStreak() const { return lossStreak; }
     // The assistant runs the club (matches, contracts, draft, camp) until the target; target in
@@ -321,6 +334,11 @@ private:
     struct PendingQuestion { bool active = false; std::string type, playerId, text; std::vector<std::string> options; };
     PendingQuestion pendingQuestion;
     int lastQuestionDay = 0;
+    std::vector<std::string> userStarters;
+    std::map<std::string, std::vector<SeasonStatRecord>> statHistory;
+    void ArchiveSeasonStats();
+    std::map<std::string, int> userMinutes;
+    void PushLineup();
     std::map<std::string, int> injuredUntil;         // player id -> first day he is fit again
     std::vector<GameRecord> gameRecords;
     int winStreak = 0;

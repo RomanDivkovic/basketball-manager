@@ -195,6 +195,8 @@ public:
 
     // Get tactical manager for strategy/substitution control
     std::shared_ptr<TacticalManager> GetTacticalManager() { return tacticalManager; }
+    // The coach's starting five and minute targets for one side; set before InitializeMatch, empty = automatic
+    void SetLineupOverride(bool isHomeTeam, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes);
 
     // Simulate single possession and return simulated seconds elapsed
     int SimulatePossession();
@@ -298,6 +300,7 @@ public:
 private:
     std::shared_ptr<MatchState> matchState;
     std::shared_ptr<TacticalManager> tacticalManager;
+    std::vector<std::string> startersOverride[2];
     int speedMultiplier;  // Game speed multiplier (1, 2, 3, 4, 6)
     
     // Pause and timeout state
