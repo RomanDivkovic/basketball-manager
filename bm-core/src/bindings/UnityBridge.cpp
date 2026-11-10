@@ -4,6 +4,7 @@
 #include "engine/CareerManager.h"
 #include "engine/MatchEngine.h"
 #include "engine/SeasonManager.h"
+#include "common/Traits.h"
 #include <algorithm>
 #include <cstdio>
 #include <iomanip>
@@ -163,6 +164,26 @@ std::shared_ptr<bm::Team> LoadTeam(const char* teamId) {
         team->roster.push_back(player);
     }
     sqlite3_finalize(roster);
+
+    // Traits come with leagues made after they were introduced; older files simply have no column
+    int hasTraitColumn = -1;
+    if (hasTraitColumn < 0) {
+        auto probe = database->PrepareStatement("SELECT 1 FROM pragma_table_info('players') WHERE name = 'traits'");
+        hasTraitColumn = probe && sqlite3_step(probe) == SQLITE_ROW ? 1 : 0;
+        if (probe) sqlite3_finalize(probe);
+    }
+    if (hasTraitColumn == 1) {
+        auto traitRows = database->PrepareStatement("SELECT player_id, traits FROM players WHERE team_id = ? AND traits != ''");
+        if (traitRows) {
+            sqlite3_bind_int(traitRows, 1, dbTeamId);
+            while (sqlite3_step(traitRows) == SQLITE_ROW) {
+                const std::string id = reinterpret_cast<const char*>(sqlite3_column_text(traitRows, 0));
+                const unsigned bits = bm::TraitsFromCsv(reinterpret_cast<const char*>(sqlite3_column_text(traitRows, 1)));
+                for (auto& p : team->roster) if (p->playerId == id) p->traits = bits;
+            }
+            sqlite3_finalize(traitRows);
+        }
+    }
     return team;
 }
 
@@ -1118,6 +1139,7 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"starter\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && std::find(career->UserStarters().begin(), career->UserStarters().end(), p->playerId) != career->UserStarters().end()) ? "true" : "false")
              << ",\"minutes\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && career->UserMinutes().count(p->playerId)) ? career->UserMinutes().at(p->playerId) : -1)
              << ",\"injured\":" << (p->injured ? "true" : "false")
+             << ",\"traits\":\"" << bm::TraitsToCsv(p->traits) << "\""
              << ",\"mood\":" << std::fixed << std::setprecision(2) << p->seasonMood
              << "}";
     }
@@ -1389,6 +1411,32 @@ const char* CareerStepDay() {
     return careerStopJson.c_str();
 }
 
+static std::string tradeJson;
+
+int CareerTradesOpen() { return career && career->TradesOpen() ? 1 : 0; }
+
+// giveCsv / getCsv: "id,id"; execute = 0 only asks the other club what it thinks
+const char* CareerTrade(const char* teamId, const char* giveCsv, const char* getCsv, int execute) {
+    auto split = [](const char* text) {
+        std::vector<std::string> out;
+        std::stringstream in(text ? text : "");
+        std::string item;
+        while (std::getline(in, item, ',')) if (!item.empty()) out.push_back(item);
+        return out;
+    };
+    std::ostringstream json;
+    if (!career || !teamId) {
+        tradeJson = "{\"valid\":false,\"accepted\":false,\"executed\":false,\"message\":\"No career\"}";
+        return tradeJson.c_str();
+    }
+    const auto r = career->Trade(teamId, split(giveCsv), split(getCsv), execute != 0);
+    json << "{\"valid\":" << (r.valid ? "true" : "false") << ",\"accepted\":" << (r.accepted ? "true" : "false")
+         << ",\"executed\":" << (r.executed ? "true" : "false") << ",\"give\":" << static_cast<int>(r.giveValue) << ",\"get\":" << static_cast<int>(r.getValue)
+         << ",\"message\":\"" << EscapeJson(r.message) << "\"}";
+    tradeJson = json.str();
+    return tradeJson.c_str();
+}
+
 // startersCsv: "id,id,id,id,id"; minutesCsv: "id:minutes;id:minutes" (empty = automatic)
 int CareerSetLineup(const char* startersCsv, const char* minutesCsv) {
     if (!career) return 0;
@@ -1444,7 +1492,7 @@ const char* CareerGetPlayerJson(const char* playerId) {
          << ",\"potential\":" << player->attributes.potentialAbility << ",\"pace\":" << player->attributes.pace << ",\"shooting\":" << player->attributes.shooting
          << ",\"ballControl\":" << player->attributes.ballControl << ",\"defense\":" << player->attributes.defense << ",\"physical\":" << player->attributes.physical
          << ",\"technical\":" << player->attributes.technical << ",\"salary\":" << player->salary << ",\"endYear\":" << player->contractEndYear
-         << ",\"injured\":" << (player->injured ? "true" : "false") << ",\"mood\":" << std::setprecision(2) << player->seasonMood << ",\"seasons\":[";
+         << ",\"injured\":" << (player->injured ? "true" : "false") << ",\"traits\":\"" << bm::TraitsToCsv(player->traits) << "\",\"mood\":" << std::setprecision(2) << player->seasonMood << ",\"seasons\":[";
     bool first = true;
     auto add = [&](int season, const std::string& team, int kind, const bm::SeasonTotals& s) {
         json << (first ? "" : ",") << "{\"season\":" << season << ",\"team\":\"" << EscapeJson(team) << "\",\"kind\":" << kind << "," << TotalsJson(s) << "}";
