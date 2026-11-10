@@ -148,6 +148,8 @@ void CareerManager::Start(const std::vector<std::shared_ptr<Team>>& teamList, co
     summerPlayers.clear();
     summerWins.clear();
     campPlanned = false;
+    friendlies.clear();
+    friendliesPlanned = false;
     nextProspectId = 1;
     assistantActive = false;
 
@@ -301,6 +303,21 @@ CoachGameInfo CareerManager::PendingCoachGame() {
     CoachGameInfo info;
     if (!started || userTeamId.empty()) return info;
 
+    if (phase == CareerPhase::Preseason) {
+        if (staffTasks & TASK_FRIENDLIES) return info;   // the assistant plays them
+        for (const auto& g : friendlies) {
+            if (g.day != today || g.played) continue;
+            if (g.home->teamId != userTeamId && g.away->teamId != userTeamId) continue;
+            info.pending = true;
+            info.kind = "friendly";
+            info.label = "Pre-season friendly";
+            info.home = g.home;
+            info.away = g.away;
+            return info;
+        }
+        return info;
+    }
+
     if (phase == CareerPhase::RegularSeason) {
         const int day = RegularSeasonDay();
         std::shared_ptr<Team> home;
@@ -377,6 +394,18 @@ bool CareerManager::SimulateCoachGame() {
         }
         return ok;
     }
+    if (game.kind == "friendly") {
+        for (auto& g : friendlies) {
+            if (g.day == today && !g.played && g.home == game.home) {
+                auto score = season.PlayStandaloneGame(g.home, g.away);
+                g.homeScore = score.first;
+                g.awayScore = score.second;
+                g.played = true;
+                return true;
+            }
+        }
+        return false;
+    }
     for (auto& g : summerGames) {
         if (g.day == today && !g.played && g.home == game.home) {
             auto score = season.PlayStandaloneGame(g.home, g.away);
@@ -411,6 +440,17 @@ bool CareerManager::RecordCoachGame(int homeScore, int awayScore) {
             lastSeriesCount = count;
         }
         return ok;
+    }
+    if (game.kind == "friendly") {
+        for (auto& g : friendlies) {
+            if (g.day == today && !g.played && g.home == game.home) {
+                g.homeScore = homeScore;
+                g.awayScore = awayScore;
+                g.played = true;
+                return true;
+            }
+        }
+        return false;
     }
     for (auto& g : summerGames) {
         if (g.day == today && !g.played && g.home == game.home) {
@@ -494,6 +534,14 @@ CareerStop CareerManager::FindStop(bool consume) {
                 s.blocking = true;
                 s.title = "Draft class " + std::to_string(DraftYear());
                 s.detail = "Who joins the league in the " + std::to_string(DraftYear()) + " draft? Load a draft file or let the game make up the class.";
+                return s;
+            }
+            if (!friendliesPlanned) {
+                CareerStop s;
+                s.kind = "friendlies_plan";
+                s.blocking = true;
+                s.title = "Pre-season friendlies";
+                s.detail = "Choose how many friendlies to play before opening night (0 to 5) and against which clubs.";
                 return s;
             }
             if (today >= RosterDeadline() && (rosterSize < MinRosterSize() || rosterSize > MaxRosterSize())) {
@@ -595,6 +643,8 @@ void CareerManager::ResolveStopWithAssistant(const CareerStop& stop) {
         AnswerQuestion(static_cast<int>(stop.options.size()) - 1);
     } else if (stop.kind == "draft_class") {
         UseGeneratedDraftClass();
+    } else if (stop.kind == "friendlies_plan") {
+        AssistantPlanFriendlies();
     } else if (stop.kind == "draft") {
         DraftAutoFinish();
     } else if (stop.kind == "summer_choice") {
@@ -604,24 +654,24 @@ void CareerManager::ResolveStopWithAssistant(const CareerStop& stop) {
     } else if (stop.kind == "roster_check") {
         AssistantFillRoster();
     } else if (stop.kind == "contract_deadline" || stop.kind == "season_end") {
-        // The assistant renews the players the club wants to keep
-        auto team = FindTeam(userTeamId);
-        if (team) {
-            auto expiring = ExpiringPlayers();
-            std::sort(expiring.begin(), expiring.end(), [](const auto& a, const auto& b) {
-                return a->attributes.currentAbility > b->attributes.currentAbility;
-            });
-            std::vector<std::shared_ptr<Player>> ranked = team->roster;
-            std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
-                return a->attributes.currentAbility > b->attributes.currentAbility;
-            });
-            for (const auto& p : expiring) {
-                const int rank = static_cast<int>(std::find(ranked.begin(), ranked.end(), p) - ranked.begin());
-                if (rank <= 9) {
-                    std::string ignored;
-                    RenewContract(p->playerId, PreferredYears(*p), &ignored);
-                }
-            }
+        AssistantRenewContracts();
+    }
+}
+
+// The assistant renews the players the club wants to keep
+void CareerManager::AssistantRenewContracts() {
+    auto team = FindTeam(userTeamId);
+    if (!team) return;
+    auto expiring = ExpiringPlayers();
+    std::vector<std::shared_ptr<Player>> ranked = team->roster;
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+        return a->attributes.currentAbility > b->attributes.currentAbility;
+    });
+    for (const auto& p : expiring) {
+        const int rank = static_cast<int>(std::find(ranked.begin(), ranked.end(), p) - ranked.begin());
+        if (rank <= 9) {
+            std::string ignored;
+            RenewContract(p->playerId, PreferredYears(*p), &ignored);
         }
     }
 }
@@ -632,6 +682,13 @@ void CareerManager::StepDay() {
     for (const auto& t : teams) for (const auto& p : t->roster) p->seasonMood *= 0.996f;
     switch (phase) {
         case CareerPhase::Preseason:
+            for (auto& g : friendlies) {
+                if (g.day != today || g.played) continue;
+                const auto score = season.PlayStandaloneGame(g.home, g.away);
+                g.homeScore = score.first;
+                g.awayScore = score.second;
+                g.played = true;
+            }
             if (today == RosterDeadline()) AiRosterFill();
             break;
         case CareerPhase::RegularSeason:
@@ -642,7 +699,10 @@ void CareerManager::StepDay() {
             StepPlayoffDay(false);
             break;
         case CareerPhase::Review:
-            if (today == DateOf(seasonYear + 1, 6, 29)) AiRenewals();
+            if (today == DateOf(seasonYear + 1, 6, 29)) {
+                if (staffTasks & TASK_CONTRACTS) AssistantRenewContracts();
+                AiRenewals();
+            }
             if (today == DateOf(seasonYear + 1, 6, 30)) ExpireContracts();
             break;
         case CareerPhase::Draft:
@@ -742,6 +802,7 @@ void CareerManager::EndPlayoffs() {
     }
     seasonCounted = true;
     if (season.GetChampion() && season.GetChampion()->teamId == userTeamId) ++titlesWon;
+    RecordHonors();
     ArchiveSeasonStats();
     PrepareDraft();
 }
@@ -801,6 +862,8 @@ void CareerManager::RollOverSeason() {
     summerPlayers.clear();
     summerWins.clear();
     campPlanned = false;
+    friendlies.clear();
+    friendliesPlanned = false;
     championName.clear();
     stageStartDay = today;
     lastRound = -1;
@@ -1063,6 +1126,106 @@ bool CareerManager::ReleasePlayer(const std::string& playerId, std::string* mess
     player->contractEndYear = 0;
     freeAgents.push_back(player);
     say(FullName(*player) + " was released");
+    return true;
+}
+
+std::shared_ptr<Player> CareerManager::FindPlayer(const std::string& playerId) const {
+    for (const auto& t : teams) for (const auto& p : t->roster) if (p->playerId == playerId) return p;
+    for (const auto& p : freeAgents) if (p->playerId == playerId) return p;
+    for (const auto& p : prospects) if (p->playerId == playerId) return p;
+    return nullptr;
+}
+
+bool CareerManager::PlanFriendlies(const std::vector<std::string>& opponentIds) {
+    if (phase != CareerPhase::Preseason) return false;
+    for (const auto& g : friendlies) if (g.played) return false;
+    friendlies.clear();
+    auto mine = FindTeam(userTeamId);
+    if (!mine) return false;
+    std::set<std::string> used;
+    int k = 0;
+    for (const auto& id : opponentIds) {
+        auto team = FindTeam(id);
+        if (k >= 5 || !team || id == userTeamId || !used.insert(id).second) continue;
+        FriendlyGame g;
+        g.day = std::max(today, DateOf(seasonYear, 10, 4) + k * 3);
+        g.home = (k % 2 == 0) ? mine : team;
+        g.away = (k % 2 == 0) ? team : mine;
+        friendlies.push_back(g);
+        ++k;
+    }
+    friendliesPlanned = true;
+    Post("Pre-season", k == 0 ? std::string("No friendlies are planned before opening night.")
+                              : std::to_string(k) + (k == 1 ? " friendly is" : " friendlies are") + " planned before opening night.");
+    return true;
+}
+
+void CareerManager::AssistantPlanFriendlies() {
+    std::vector<std::string> others;
+    for (const auto& t : teams) if (t->teamId != userTeamId) others.push_back(t->teamId);
+    std::shuffle(others.begin(), others.end(), rng);
+    others.resize(std::min<size_t>(3, others.size()));
+    PlanFriendlies(others);
+}
+
+void CareerManager::SetStaff(int tasks, const std::string& focus, int offense, int defense) {
+    staffTasks = tasks & 15;
+    scoutFocus = focus.empty() ? "best" : focus;
+    staffOffense = offense < 0 ? -1 : std::clamp(offense, 0, 5);
+    staffDefense = defense < 0 ? -1 : std::clamp(defense, 0, 5);
+    PushLineup();
+}
+
+std::vector<CareerManager::InjuryInfo> CareerManager::UserInjuries() const {
+    std::vector<InjuryInfo> out;
+    auto team = FindTeam(userTeamId);
+    if (!team) return out;
+    for (const auto& p : team->roster) {
+        auto it = injuredUntil.find(p->playerId);
+        if (p->injured && it != injuredUntil.end()) out.push_back({p, it->second});
+    }
+    std::sort(out.begin(), out.end(), [](const InjuryInfo& a, const InjuryInfo& b) { return a.backDay < b.backDay; });
+    return out;
+}
+
+CareerManager::TeamHonors CareerManager::HonorsOf(const std::string& teamId) const {
+    auto it = honors.find(teamId);
+    return it == honors.end() ? TeamHonors() : it->second;
+}
+
+// Titles, Finals and conference titles per club over the seasons of this career
+void CareerManager::RecordHonors() {
+    for (const auto& s : season.GetPlayoffBracket()) {
+        if (!s.complete || !s.winner) continue;
+        if (s.roundIndex == 3) ++honors[s.winner->teamId].conferenceTitles;
+        if (s.roundIndex == 4) {
+            ++honors[s.winner->teamId].titles;
+            if (s.team1) ++honors[s.team1->teamId].finals;
+            if (s.team2) ++honors[s.team2->teamId].finals;
+        }
+    }
+}
+
+bool CareerManager::EditPlayer(const std::string& playerId, const PlayerEdit& edit, std::string* message) {
+    auto say = [&](const std::string& text) { if (message) *message = text; };
+    if (!openLeague) { say("This league is closed: players cannot be edited"); return false; }
+    auto player = FindPlayer(playerId);
+    if (!player) { say("Player not found"); return false; }
+    auto& a = player->attributes;
+    a.pace = std::clamp(edit.pace, 1, 20);
+    a.shooting = std::clamp(edit.shooting, 1, 20);
+    a.ballControl = std::clamp(edit.ballControl, 1, 20);
+    a.defense = std::clamp(edit.defense, 1, 20);
+    a.physical = std::clamp(edit.physical, 1, 20);
+    a.technical = std::clamp(edit.technical, 1, 20);
+    a.currentAbility = std::clamp(edit.ability, 40, 99);
+    a.potentialAbility = std::max(a.currentAbility, std::clamp(edit.potential, 40, 99));
+    if (player->salary > 0 || edit.salary > 0) {
+        player->salary = std::clamp(edit.salary, 0, static_cast<int>(0.35 * salaryCap));
+        player->contractEndYear = std::clamp(edit.contractEnd, seasonYear, seasonYear + 6);
+    }
+    player->traits = edit.traits & 255u;
+    say(FullName(*player) + " was updated");
     return true;
 }
 
@@ -1494,8 +1657,18 @@ std::shared_ptr<Player> CareerManager::BestProspect() {
     std::shared_ptr<Player> best;
     double bestScore = -1.0e9;
     std::uniform_real_distribution<double> noise(-3.0, 3.0);
+    const bool mine = !draftOrder.empty() && draftResults.size() < draftOrder.size() && draftOrder[draftResults.size()] == userTeamId;
     for (const auto& p : prospects) {
-        const double score = 0.5 * p->attributes.potentialAbility + 0.5 * p->attributes.currentAbility + noise(rng);
+        double score = 0.5 * p->attributes.potentialAbility + 0.5 * p->attributes.currentAbility + noise(rng);
+        if (mine && (staffTasks & TASK_SCOUTING)) {
+            const bool guard = p->position == Position::PG || p->position == Position::SG;
+            const bool bigMan = p->position == Position::PF || p->position == Position::C;
+            if (scoutFocus == "guards" && guard) score += 6;
+            else if (scoutFocus == "bigs" && bigMan) score += 6;
+            else if (scoutFocus == "wings" && (p->position == Position::SF || p->position == Position::SG)) score += 5;
+            else if (scoutFocus == "upside") score += 0.4 * (p->attributes.potentialAbility - p->attributes.currentAbility);
+            else if (scoutFocus == "ready") score += 0.3 * p->attributes.currentAbility - 0.2 * p->attributes.potentialAbility;
+        }
         if (score > bestScore) {
             bestScore = score;
             best = p;
@@ -1663,6 +1836,7 @@ int CareerManager::RollProgression(const Player& p, bool isUserTeam, bool summer
         if (room <= 0) mean = std::min(mean, 0.0);
     }
     if (summer && age <= 24) mean += 0.8;
+    if (isUserTeam && (staffTasks & TASK_DEVELOPMENT) && age <= 26) mean += 0.5;   // the assistant works with the young players
     if (isUserTeam) {
         const double dev = (coachDevelopment - 50) / 40.0;
         mean += (mean > 0 ? 0.9 : 0.4) * dev;
@@ -2070,6 +2244,7 @@ bool CareerManager::SetLineup(const std::vector<std::string>& starters, const st
 void CareerManager::PushLineup() {
     std::unordered_map<std::string, int> minutes(userMinutes.begin(), userMinutes.end());
     season.SetTeamLineup(userTeamId, userStarters, minutes);
+    if (staffOffense >= 0 || staffDefense >= 0) season.SetTeamTactics(userTeamId, std::max(0, staffOffense), std::max(0, staffDefense));
 }
 
 // The league starts with unsigned players on the market so the first season already has free agency
@@ -2197,7 +2372,9 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
             {"phase", std::to_string(static_cast<int>(phase))}, {"today", std::to_string(today)}, {"stage_start", std::to_string(stageStartDay)},
             {"champion", championName}, {"season_result", seasonResult}, {"season_counted", seasonCounted ? "1" : "0"},
             {"draft_done", draftDone ? "1" : "0"}, {"custom_year", std::to_string(customProspectsYear)},
-            {"draft_class_answered", draftClassAnswered.count(seasonYear) ? "1" : "0"}, {"camp_planned", campPlanned ? "1" : "0"}};
+            {"draft_class_answered", draftClassAnswered.count(seasonYear) ? "1" : "0"}, {"camp_planned", campPlanned ? "1" : "0"},
+            {"open_league", openLeague ? "1" : "0"}, {"staff_tasks", std::to_string(staffTasks)}, {"scout_focus", scoutFocus},
+            {"staff_offense", std::to_string(staffOffense)}, {"staff_defense", std::to_string(staffDefense)}, {"friendlies_planned", friendliesPlanned ? "1" : "0"}};
         for (const auto& kv : values) {
             sqlite3_reset(st);
             text(st, 1, kv.first);
@@ -2305,6 +2482,19 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
             list("minutes", minuteItems);
         }
         list("rookies", std::vector<std::string>(rookies.begin(), rookies.end()));
+        {
+            std::vector<std::string> items;
+            for (const auto& g : friendlies) {
+                items.push_back(std::to_string(g.day) + "|" + g.home->teamId + "|" + g.away->teamId + "|" + (g.played ? "1" : "0") + "|"
+                                + std::to_string(g.homeScore) + "|" + std::to_string(g.awayScore));
+            }
+            list("friendlies", items);
+            std::vector<std::string> honorItems;
+            for (const auto& kv : honors) {
+                honorItems.push_back(kv.first + "|" + std::to_string(kv.second.titles) + "|" + std::to_string(kv.second.finals) + "|" + std::to_string(kv.second.conferenceTitles));
+            }
+            list("honors", honorItems);
+        }
         sqlite3_finalize(st);
     }
     if (auto st = prepare("INSERT INTO career_stats VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
@@ -2536,6 +2726,14 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     seasonCounted = number("season_counted", 0) != 0;
     draftDone = number("draft_done", 0) != 0;
     campPlanned = number("camp_planned", 0) != 0;
+    openLeague = number("open_league", 0) != 0;
+    staffTasks = number("staff_tasks", 0);
+    scoutFocus = values.count("scout_focus") ? values["scout_focus"] : std::string("best");
+    staffOffense = number("staff_offense", -1);
+    staffDefense = number("staff_defense", -1);
+    friendliesPlanned = number("friendlies_planned", 0) != 0;
+    friendlies.clear();
+    honors.clear();
     customProspectsYear = customProspects.empty() ? 0 : number("custom_year", 0);
     draftClassAnswered.clear();
     if (number("draft_class_answered", 0) != 0) draftClassAnswered.insert(seasonYear);
@@ -2555,6 +2753,24 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
                 if (eq != std::string::npos) userMinutes[item.substr(0, eq)] = std::atoi(item.c_str() + eq + 1);
             }
             else if (kind == "rookies") rookies.insert(ColumnText(st, 1));
+            else if (kind == "friendlies" || kind == "honors") {
+                std::vector<std::string> parts;
+                std::stringstream in(ColumnText(st, 1));
+                std::string item;
+                while (std::getline(in, item, '|')) parts.push_back(item);
+                if (kind == "friendlies" && parts.size() == 6) {
+                    FriendlyGame g;
+                    g.day = std::atoi(parts[0].c_str());
+                    g.home = FindTeam(parts[1]);
+                    g.away = FindTeam(parts[2]);
+                    g.played = parts[3] == "1";
+                    g.homeScore = std::atoi(parts[4].c_str());
+                    g.awayScore = std::atoi(parts[5].c_str());
+                    if (g.home && g.away) friendlies.push_back(g);
+                } else if (kind == "honors" && parts.size() == 4) {
+                    honors[parts[0]] = TeamHonors{std::atoi(parts[1].c_str()), std::atoi(parts[2].c_str()), std::atoi(parts[3].c_str())};
+                }
+            }
         }
         sqlite3_finalize(st);
     }
