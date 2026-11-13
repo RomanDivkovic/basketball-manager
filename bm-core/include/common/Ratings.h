@@ -25,7 +25,7 @@ inline std::vector<DetailRating> DetailedRatings(const Player& p) {
     const size_t seed = std::hash<std::string>()(p.playerId + p.lastName);
     int salt = 0;
     auto rate = [&](double attribute, double adjust) {
-        const int jitter = static_cast<int>((seed >> (salt++ * 3)) % 7) - 3;
+        const int jitter = static_cast<int>((seed >> ((salt++ * 3) % (sizeof(size_t) * 8))) % 7) - 3;
         return std::clamp(static_cast<int>(28.0 + attribute * 3.45 + adjust + jitter), 25, 99);
     };
     std::vector<DetailRating> out;
@@ -60,8 +60,13 @@ inline std::vector<DetailRating> DetailedRatings(const Player& p) {
     add(3, "Defensive rebound", phys * 0.6 + def * 0.2 + tech * 0.2, tall * 0.5);
 
     add(4, "Basketball IQ", tech, 0);
+    add(4, "Leadership", tech, std::max(0, p.age - 28) * 0.5);
     add(4, "Discipline", tech * 0.5 + def * 0.5, 0);
     add(4, "Consistency", tech * 0.6 + shoot * 0.2 + ball * 0.2, 0);
+    for (auto& r : out) {
+        auto it = p.detailedRatings.find(r.name);
+        if (it != p.detailedRatings.end()) r.value = std::clamp(it->second, 25, 99);
+    }
     return out;
 }
 

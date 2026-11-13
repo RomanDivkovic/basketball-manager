@@ -30,6 +30,7 @@ int IsMatchComplete();
 void SetSimulationSpeed(int speedMultiplier);
 void SetPauseEnabled(int enabled);
 void CallTimeout(int isHomeTeam);
+int MatchShout(int home, int command, const char* target);
 void ApplyCoachingCallout(int isHomeTeam, int callout);
 
 // Season management
@@ -91,11 +92,13 @@ void CareerSetOpen(int open);                                           // open 
 int CareerPlanFriendlies(const char* opponentsCsv);
 const char* CareerGetFriendliesJson();
 const char* CareerGetTeamJson(const char* teamId);
+int CareerEditDetailedRatings(const char* playerId, const char* values);
 int CareerEditPlayer(const char* playerId, int pace, int shooting, int ballControl, int defense, int physical, int technical,
                      int ability, int potential, int salary, int contractEnd, const char* traitsCsv);
 int CareerTradesOpen();
 const char* CareerTrade(const char* teamId, const char* giveCsv, const char* getCsv, int execute);   // JSON verdict; execute = 1 makes the trade if accepted
 const char* CareerGetPlayerJson(const char* playerId);   // profile and season-by-season statistics of any player
+const char* CareerGetLeagueBoxScoreJson(int day, const char* home);
 const char* CareerGetBoxScoreJson(int day);      // box score of the coach's game on a fixture day
 const char* CareerVacation(const char* target);  // week, month, playoffs, season_end, draft, free_agency, camp, new_season
 void CareerDismissStop();
@@ -118,6 +121,8 @@ void CareerUseGeneratedDraftClass();             // the game makes up the class
 const char* CareerGetHistoryJson();              // Hall of Fame and retired numbers, newest first
 const char* CareerGetSummerJson();
 void CareerSetSummerMode(int mode);              // 1 = the coach plays, 2 = the assistant runs it
+void CareerSetPlayerTraining(const char* id, const char* focus);
+void CareerSetWeeklyTraining(const char* focus, int sessions, int intensity);
 void CareerSetTrainingPlan(const char* focus, int intensity, int coachDevelopment);
 void CareerSetMentoring(const char* mentorId, const char* menteeId);
 int CareerAssistantFillRoster();

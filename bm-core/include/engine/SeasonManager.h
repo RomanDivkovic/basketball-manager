@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 
 #include "common/Types.h"
 #include <memory>
@@ -60,6 +61,7 @@ public:
 
     // Days where one team's game is held back so the human coach can play it
     // Returns true when the held team has an unplayed game on that day.
+    void SetGamePlayedHook(std::function<void(const Game&)> hook) { gamePlayedHook = std::move(hook); }
     bool PlayDayExcept(int dayNumber, const std::string& holdTeamId);
     bool HasUnplayedGame(int dayNumber, const std::string& teamId, std::shared_ptr<Team>* home = nullptr, std::shared_ptr<Team>* away = nullptr) const;
     bool RecordResult(int dayNumber, const std::string& homeId, const std::string& awayId, int homeScore, int awayScore);
@@ -165,6 +167,7 @@ private:
     std::map<std::string, TeamRecord> standings;
     std::vector<Game> schedule;
     std::vector<FixtureDay> fixtureDays;
+    std::function<void(const Game&)> gamePlayedHook;
 
     int seasonYear;
     std::string leagueType;

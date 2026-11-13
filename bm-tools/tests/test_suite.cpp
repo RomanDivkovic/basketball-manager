@@ -1025,8 +1025,16 @@ void TestDayByDayAndEvents() {
     TEST_ASSERT(days >= 100 && games >= 30, "Every one of the coach's games is a stop");
     TEST_ASSERT(questions >= 1, "Players come with questions during the season");
     TEST_ASSERT(mostInjured >= 1, "Players get injured");
-    TEST_ASSERT(career.GameRecords().size() == static_cast<size_t>(games), "Every played game has a box score");
-    const auto& record = career.GameRecords().front();
+    const auto userBoxes = std::count_if(career.GameRecords().begin(), career.GameRecords().end(), [&](const auto& r) { return r.homeName == career.UserTeam()->name || r.awayName == career.UserTeam()->name; });
+    TEST_ASSERT(userBoxes == games, "Every coach game has a box score");
+    TEST_ASSERT(career.GameRecords().size() > static_cast<size_t>(games), "League games also have box scores");
+    const auto& record = *std::find_if(career.GameRecords().begin(), career.GameRecords().end(), [&](const auto& r) { return r.homeName == career.UserTeam()->name || r.awayName == career.UserTeam()->name; });
+    for (const auto& box : career.GameRecords()) {
+        int homePoints = 0, awayPoints = 0;
+        for (const auto& l : box.home) homePoints += l.points;
+        for (const auto& l : box.away) awayPoints += l.points;
+        TEST_ASSERT(homePoints == box.homeScore && awayPoints == box.awayScore, "Every league box matches its final score");
+    }
     int points = 0;
     for (const auto& l : record.home) points += l.points;
     TEST_ASSERT(record.home.size() >= 8 && record.away.size() >= 8 && points >= record.homeScore * 8 / 10, "The box score lists the players and their points");
@@ -1076,7 +1084,7 @@ void TestCoachLineupAndMinutes() {
         if (stop.kind == "coach_game") { career.SimulateCoachGame(); break; }
     }
     TEST_ASSERT(!career.GameRecords().empty(), "A game was played");
-    const auto& record = career.GameRecords().front();
+    const auto& record = *std::find_if(career.GameRecords().begin(), career.GameRecords().end(), [&](const auto& r) { return r.homeName == career.UserTeam()->name || r.awayName == career.UserTeam()->name; });
     const auto& mine = record.userHome ? record.home : record.away;
     int starterMinutes = 0;
     bool starPlayed = false;
@@ -1410,11 +1418,75 @@ void TestCustomLeagueFiles() {
     g_testsPassed++;
 }
 
+void TestDevelopmentUpdates() {
+    std::cout << "[TEST] Training, mentoring, scouting, editing and two-attack shouts...\n";
+    auto league = CreateLeague(30, 94);
+    CareerManager career;
+    CareerManager::Config cfg; cfg.userTeamId = "1"; cfg.seed = 72;
+    career.Start(league, cfg);
+    auto p = league[0]->roster[0];
+    auto q = league[0]->roster[4];
+    p->age = 31; q->age = 20;
+    p->position = bm::Position::PG; q->position = bm::Position::C;
+    TEST_ASSERT(!CareerManager::CanMentor(*p, *q), "A normal PG cannot mentor a centre");
+    p->age = 35; p->attributes.technical = 18;
+    TEST_ASSERT(CareerManager::CanMentor(*p, *q), "An old elite leader can mentor across positions");
+    TEST_ASSERT(!CareerManager::CanMentor(*p, *p), "Cannot mentor oneself");
+    p->age = 29; q->position = bm::Position::SG;
+    TEST_ASSERT(CareerManager::CanMentor(*p, *q), "Adjacent positions can mentor");
+    career.SetWeeklyTraining("Shooting", 7, 3);
+    for (int i = 0; i < 8; ++i) career.TrainDay();
+    TEST_ASSERT(q->trainingFatigue > 0.3f, "Daily heavy training reduces readiness");
+    const float tired = q->trainingFatigue;
+    career.SetWeeklyTraining("Shooting", 0, 1);
+    for (int i = 0; i < 4; ++i) career.TrainDay();
+    TEST_ASSERT(q->trainingFatigue < tired, "Rest restores readiness");
+    career.SetWeeklyTraining("Shooting", 99, 3);
+    TEST_ASSERT(career.WeeklySessions() == 7, "Sessions are capped at seven");
+    std::vector<int> values(bm::DetailedRatings(*q).size(), 80);
+    TEST_ASSERT(!career.EditDetailedRatings(q->playerId, values), "Closed leagues reject detailed edits");
+    career.SetOpenLeague(true);
+    TEST_ASSERT(career.EditDetailedRatings(q->playerId, values), "Open leagues accept detailed edits");
+    TEST_ASSERT(q->attributes.currentAbility == 80, "Overall follows detailed stats");
+    values[3] = 40;
+    TEST_ASSERT(career.EditDetailedRatings(q->playerId, values), "A single stat can be changed independently");
+    TEST_ASSERT(bm::DetailedRatings(*q)[3].value == 40 && bm::DetailedRatings(*q)[2].value == 80, "Other detailed stats retain their values");
+    TEST_ASSERT(q->attributes.currentAbility < 80, "Lowering a stat lowers overall");
+    values[0] = 200;
+    TEST_ASSERT(!career.EditDetailedRatings(q->playerId, values), "Out-of-range edits are rejected");
+    TEST_ASSERT(!career.Prospects().empty(), "Draft class is scoutable during preseason");
+    career.SetStaff(CareerManager::TASK_SCOUTING, "guards-offense", -1, -1);
+    bool report = false;
+    for (const auto& n : career.Inbox()) if (n.title == "Scout update") report = true;
+    TEST_ASSERT(report, "Assignments produce a news report");
+    sqlite3* db = nullptr; sqlite3_open(":memory:", &db); std::string error;
+    TEST_ASSERT(career.SaveState(db, &error), "New development data saves");
+    const std::string id = q->playerId;
+    CareerManager restored; restored.Start(CreateLeague(30, 94), cfg);
+    TEST_ASSERT(restored.LoadState(db, &error), "New development data loads");
+    sqlite3_close(db);
+    TEST_ASSERT(restored.WeeklySessions() == 7, "Weekly training survives a save round-trip");
+    auto saved = restored.FindPlayer(id);
+    TEST_ASSERT(saved && bm::DetailedRatings(*saved)[3].value == 40, "Individual ratings survive a save round-trip");
+    TEST_ASSERT(saved->trainingFatigue > 0, "Readiness survives a save round-trip");
+    bm::engine::MatchEngine engine; engine.SetHeadless(true); engine.SetPauseEnabled(false);
+    engine.InitializeMatch(league[0], league[1]);
+    TEST_ASSERT(!engine.Shout(true, 5, "missing"), "Play-through rejects invalid players");
+    TEST_ASSERT(engine.Shout(true, 0), "Coach can shout during a match");
+    TEST_ASSERT(engine.ShoutAttacksLeft(true) == 2, "Shout begins with two attacks");
+    int guard = 0;
+    while (engine.ShoutAttacksLeft(true) > 0 && guard++ < 8) engine.SimulatePossession();
+    TEST_ASSERT(engine.ShoutAttacksLeft(true) == 0, "Shout expires after the team's attacks");
+    TEST_ASSERT(engine.GetTacticalManager()->GetHomeOffensiveStrategy() == bm::engine::OffensiveStrategy::BALANCED, "Shout preserves permanent tactics");
+    g_testsPassed++;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "  Basketball Manager Core Automated Tests\n";
     std::cout << "========================================\n";
 
+    TestDevelopmentUpdates();
     TestQuarterProgression();
     TestOvertimeTriggerWhenTied();
     TestSecondByStepFlow();

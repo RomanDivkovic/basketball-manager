@@ -115,6 +115,7 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
     lastBallHolderId.clear();
     feedHistory.clear();
     feedTotal = 0;
+    shouts[0] = ShoutState{}; shouts[1] = ShoutState{};
     
     // Initialize starting five (best 5 available by ability)
     auto setupStartingFive = [](std::shared_ptr<Team> team, std::vector<std::shared_ptr<Player>>& lineup, const std::vector<std::string>& wanted) {
@@ -126,7 +127,7 @@ void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_pt
             // Reset per-game stats
             p->onCourt = false;
             p->minutesPlayedThisGame = 0;
-            p->fatigueLevel = 0.0f;
+            p->fatigueLevel = p->trainingFatigue;
             p->pointsThisGame = 0;
             p->reboundsThisGame = 0;
             p->assistsThisGame = 0;
@@ -432,6 +433,19 @@ void MatchEngine::RecordTraitEvents(const PossessionPlan& plan) {
     }
 }
 
+bool MatchEngine::Shout(bool home, int command, const std::string& target) {
+    if (!matchState || matchState->matchComplete || command < 0 || command > 5) return false;
+    if (command == 5) {
+        bool valid = false;
+        for (const auto& p : (home ? matchState->homeTeam : matchState->awayTeam)->roster)
+            if (p->playerId == target && p->onCourt && !p->injured) valid = true;
+        if (!valid) return false;
+    }
+    shouts[home ? 0 : 1] = {command, 2, target};
+    EmitFeed("Coach shouts: instruction active for the next two attacks.");
+    return true;
+}
+
 bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     if (!matchState || matchState->matchComplete) return false;
 
@@ -514,6 +528,8 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         if (scheme == OffensiveStrategy::PLAY_THROUGH_PLAYER && p->playerId == offenseTarget[plan.homeOffense ? 0 : 1]) {
             w *= 2.4f;
         }
+        const auto& shout = shouts[plan.homeOffense ? 0 : 1];
+        if (shout.attacks > 0 && shout.command == 5 && p->playerId == shout.target) w *= 3.0f;
         // Individual feedback
         w *= 1.0f + 0.5f * InstructionStrength(p->playerId, PlayerInstruction::LookForYourShot)
                   - 0.3f * InstructionStrength(p->playerId, PlayerInstruction::FocusOnDefense);
@@ -638,7 +654,19 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     if (TraitActive(*ballHandler, TRAIT_FLOOR_GENERAL)) turnoverChance -= 0.025f;
     schemeEfficiency -= 0.015f * InstructionStrength(ballHandler->playerId, PlayerInstruction::LookForYourShot);
     turnoverChance = std::max(0.01f, turnoverChance);
+    auto& attackShout = shouts[plan.homeOffense ? 0 : 1];
+    auto& defenseShout = shouts[plan.homeOffense ? 1 : 0];
+    if (attackShout.attacks > 0) {
+        if (attackShout.command == 0) threePointChance += 0.25f;
+        if (attackShout.command == 1) { threePointChance -= 0.25f; schemeEfficiency += 0.02f; }
+        if (attackShout.command == 4) { assistBonus += 0.2f; turnoverChance *= 0.8f; }
+        if (attackShout.command != 2 && attackShout.command != 3) --attackShout.attacks;
+    }
+    if (defenseShout.attacks > 0 && defenseShout.command == 2) defensiveRating *= 1.12f;
+    if (defenseShout.attacks > 0 && defenseShout.command == 3) { defensiveRating *= 1.18f; foulChance += 0.06f; }
+    if (defenseShout.attacks > 0 && (defenseShout.command == 2 || defenseShout.command == 3)) --defenseShout.attacks;
     threePointChance = std::min(0.8f, std::max(0.1f, threePointChance));
+    if (plan.fastBreak) threePointChance = 0.0f; // attack the rim in transition
 
     // Build log
     std::ostringstream oss;
@@ -2196,10 +2224,11 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
             });
             const CourtPoint lanes[4] = {{hoopX + dir * 11.0f, 9.0f}, {hoopX + dir * 11.0f, 41.0f},
                                          {hoopX + dir * 21.0f, 18.0f}, {hoopX + dir * 23.0f, 32.0f}};
-            adv.moves[carrier->playerId] = ClampToCourt(CourtPoint{hoopX + dir * 14.0f, kHoopY});
+            adv.moves[carrier->playerId] = ClampToCourt(CourtPoint{hoopX + dir * (carrier == finalHolder ? 3.0f : 9.0f), kHoopY});
             for (size_t k = 0; k < others.size() && k < 4; ++k) {
                 adv.moves[others[k]->playerId] = ClampToCourt(CourtPoint{lanes[k].x + Jit(1.5f), lanes[k].y + Jit(2.0f)});
             }
+            if (carrier != finalHolder) adv.moves[finalId] = rimPoint(2.0f, 4.0f, 3.0f);
             adv.startText = Fill(PickText({"{A} pushes it up the floor!", "{A} is off to the races!", "{A} leads the break!"}),
                                  carrier->lastName);
         } else {
@@ -2253,6 +2282,7 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
 
         PossessionBeat pb = makeBeat("pass", 1, true, 0.7f);
         pb.moves = setMoves(holders[k]->playerId, holders[k + 1]->playerId, true);
+        if (plan.fastBreak) pb.moves[finalId] = rimPoint(2.0f, 4.0f, 3.0f);
         pb.ballFrom = holders[k]->playerId;
         pb.ballTo = holders[k + 1]->playerId;
         pb.startText = PassText(holders[k], holders[k + 1]);
@@ -2286,6 +2316,7 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
         if (plan.isThree) {
             return Fill(PickText({"{A} rises up for three...", "{A} lets it fly from deep...", "{A} fires from downtown..."}), shooterName);
         }
+        if (plan.fastBreak && plan.assisted && plan.shotKind == 1) return Fill("{A} rises for the alley-oop...", shooterName);
         if (layup) {
             return Fill(PickText({"{A} goes up strong at the rim...", "{A} lays it up..."}), shooterName);
         }
@@ -2340,7 +2371,7 @@ void MatchEngine::BuildScript(const PossessionPlan& plan) {
             if (plan.isThree) {
                 made = Fill(PickText({"{A} hits the three!", "{A} drains it from deep!", "{A} is good from downtown!"}), shooterName);
             } else if (layup) {
-                made = Fill(PickText({"{A} finishes at the rim!", "{A} scores inside."}), shooterName);
+                made = plan.shotKind == 1 ? Fill(plan.assisted && plan.fastBreak ? "{A} throws down the alley-oop!" : "{A} dunks it!", shooterName) : Fill("{A} finishes at the rim!", shooterName);
             } else {
                 made = Fill(PickText({"{A} knocks down the jumper!", "{A} hits the mid-range shot."}), shooterName);
             }

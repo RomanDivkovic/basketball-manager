@@ -200,6 +200,9 @@ public:
     // The coach's starting five and minute targets for one side; set before InitializeMatch, empty = automatic
     void SetLineupOverride(bool isHomeTeam, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes);
 
+    // Temporary match instructions, measured in this team's attacks.
+    bool Shout(bool home, int command, const std::string& target = "");
+    int ShoutAttacksLeft(bool home) const { return shouts[home ? 0 : 1].attacks; }
     // Simulate single possession and return simulated seconds elapsed
     int SimulatePossession();
 
@@ -317,6 +320,8 @@ private:
     CoachingCallout awayLastCallout;    // Last callout issued to away team
     static constexpr int COACHING_MOMENTUM_DURATION = 8; // Possessions a callout affects play
 
+    struct ShoutState { int command = -1, attacks = 0; std::string target; };
+    ShoutState shouts[2];
     // Live playback state
     bool headless = false;
     std::deque<PossessionBeat> beatQueue;

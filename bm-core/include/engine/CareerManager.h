@@ -75,6 +75,8 @@ struct GameRecord {
 
 struct CareerEvent {
     int day = 0;
+    std::string action, reference;
+    int gameDay = 0;
     std::string title;
     std::string text;
 };
@@ -246,6 +248,7 @@ public:
     // ---- club history, and the open/closed league ----
     struct TeamHonors { int titles = 0, finals = 0, conferenceTitles = 0; };
     TeamHonors HonorsOf(const std::string& teamId) const;
+    bool EditDetailedRatings(const std::string& playerId, const std::vector<int>& ratings);
     bool OpenLeague() const { return openLeague; }
     void SetOpenLeague(bool open) { openLeague = open; }
     struct PlayerEdit {
@@ -266,7 +269,7 @@ public:
     // ---- draft ----
     bool DraftReady() const { return !draftOrder.empty(); }
     bool DraftFinished() const { return draftDone; }
-    const std::vector<std::shared_ptr<Player>>& Prospects() const { return prospects; }
+    const std::vector<std::shared_ptr<Player>>& Prospects() const { return customProspectsYear == DraftYear() && !customProspects.empty() ? customProspects : prospects; }
     const std::vector<DraftPickRecord>& DraftResults() const { return draftResults; }
     int DraftCursor() const { return static_cast<int>(draftResults.size()); }
     int DraftTotalPicks() const { return static_cast<int>(draftOrder.size()); }
@@ -292,7 +295,13 @@ public:
     std::vector<std::shared_ptr<Player>> SummerRoster(const std::string& teamId) const;
     void SetTrainingPlan(const std::string& focus, int intensity, int coachDevelopment);
     bool TrainingPlanSet() const { return campPlanned; }
-    void SetMentoring(const std::string& mentorId, const std::string& menteeId) { mentor = mentorId; mentee = menteeId; }
+    void SetMentoring(const std::string& mentorId, const std::string& menteeId);
+    static bool CanMentor(const Player& veteran, const Player& youngster);
+    void SetWeeklyTraining(const std::string& focus, int sessions, int intensity);
+    void SetPlayerTraining(const std::string& id, const std::string& focus);
+    std::string PlayerTraining(const std::string& id) const { auto it = individualTraining.find(id); return it == individualTraining.end() ? "Team plan" : it->second; }
+    int WeeklySessions() const { return weeklySessions; }
+    void TrainDay();
 
     // ---- roster limits ----
     static int MinRosterSize() { return 13; }
@@ -367,6 +376,10 @@ private:
     std::string mentor;
     std::string mentee;
     bool campPlanned = false;
+    std::string weeklyFocus = "Shooting";
+    int weeklySessions = 2, weeklyIntensity = 2;
+    std::map<std::string, float> trainingProgress;
+    std::map<std::string, std::string> individualTraining;
     int nextProspectId = 1;
     struct CareerRecord {
         int peak = 0;          // best rating seen
@@ -427,7 +440,8 @@ private:
     void StartPlayoffs();
     void EndPlayoffs();
     void RollOverSeason();
-    void Post(const std::string& title, const std::string& text);
+    void Post(const std::string& title, const std::string& text, const std::string& action = "", const std::string& reference = "", int gameDay = 0);
+    void ScoutReport();
     bool Acknowledge(const std::string& key);      // true the first time
 
     // contracts and rosters

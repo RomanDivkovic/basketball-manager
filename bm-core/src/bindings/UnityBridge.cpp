@@ -467,9 +467,9 @@ std::string BuildCareerJson() {
     json << ",\"inbox\":[";
     int shown = 0;
     for (const auto& ev : career->Inbox()) {
-        if (shown++ >= 15) break;
+        if (shown++ >= 180) break;
         json << (shown > 1 ? "," : "") << "{\"date\":\"" << EscapeJson(bm::engine::FormatDate(ev.day)) << "\",\"title\":\"" << EscapeJson(ev.title)
-             << "\",\"text\":\"" << EscapeJson(ev.text) << "\"}";
+             << "\",\"text\":\"" << EscapeJson(ev.text) << "\",\"action\":\"" << EscapeJson(ev.action) << "\",\"reference\":\"" << EscapeJson(ev.reference) << "\",\"gameDay\":" << ev.gameDay << "}";
     }
     json << "]";
 
@@ -727,6 +727,10 @@ void SetPauseEnabled(int enabled) {
 
 void CallTimeout(int isHomeTeam) {
     if (matchEngine) matchEngine->CallTimeout(isHomeTeam != 0);
+}
+
+int MatchShout(int home, int command, const char* target) {
+    return matchEngine && matchEngine->Shout(home != 0, command, target ? target : "") ? 1 : 0;
 }
 
 void ApplyCoachingCallout(int isHomeTeam, int callout) {
@@ -1124,6 +1128,8 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"name\":\"" << EscapeJson(p->firstName + " " + p->lastName) << "\""
              << ",\"pos\":\"" << PositionToStr(p->position) << "\""
              << ",\"jersey\":" << p->jerseyNumber
+             << ",\"leadership\":" << [&]() { for (const auto& r : bm::DetailedRatings(*p)) if (std::string(r.name) == "Leadership") return r.value; return 0; }()
+             << ",\"trainingFocus\":\"" << (career ? EscapeJson(career->PlayerTraining(p->playerId)) : "Team plan") << "\""
              << ",\"rating\":" << p->attributes.currentAbility
              << ",\"potential\":" << p->attributes.potentialAbility
              << ",\"pace\":" << p->attributes.pace
@@ -1495,6 +1501,17 @@ const char* CareerGetTeamJson(const char* teamId) {
 }
 
 // Open leagues only: changes a player's attributes, ratings, contract and traits
+int CareerEditDetailedRatings(const char* playerId, const char* csv) {
+    if (!career || !playerId || !csv) return 0;
+    std::vector<int> values;
+    std::stringstream stream(csv); std::string item;
+    while (std::getline(stream, item, ',')) {
+        try { size_t end; int value = std::stoi(item, &end); if (end != item.size()) return 0; values.push_back(value); }
+        catch (...) { return 0; }
+    }
+    return career->EditDetailedRatings(playerId, values) ? 1 : 0;
+}
+
 int CareerEditPlayer(const char* playerId, int pace, int shooting, int ballControl, int defense, int physical, int technical,
                      int ability, int potential, int salary, int contractEnd, const char* traitsCsv) {
     if (!career || !playerId) return 0;
@@ -1572,6 +1589,7 @@ const char* CareerGetPlayerJson(const char* playerId) {
     }
     if (!player) for (const auto& p : career->FreeAgents()) if (p->playerId == playerId) player = p;
     if (!player) for (const auto& p : career->Prospects()) if (p->playerId == playerId) { player = p; teamName = "Draft prospect"; }
+    if (!player) { player = career->FindPlayer(playerId); if (player) teamName = "Draft prospect"; }
     if (!player) { playerProfileJson = "{\"found\":false}"; return playerProfileJson.c_str(); }
     const bool mine = !teamId.empty() && teamId == career->UserTeamId();
     std::ostringstream json;
@@ -1608,8 +1626,7 @@ const char* CareerGetPlayerJson(const char* playerId) {
     return playerProfileJson.c_str();
 }
 
-const char* CareerGetBoxScoreJson(int day) {
-    const bm::engine::GameRecord* r = career ? career->FindGameRecord(career->SeasonYear(), day) : nullptr;
+static const char* BoxScoreJson(const bm::engine::GameRecord* r) {
     if (!r) { boxScoreJson = "{\"found\":false}"; return boxScoreJson.c_str(); }
     auto side = [](const std::vector<bm::engine::BoxLine>& lines) {
         std::ostringstream out;
@@ -1630,6 +1647,15 @@ const char* CareerGetBoxScoreJson(int day) {
          << ",\"home\":" << side(r->home) << ",\"away\":" << side(r->away) << "}";
     boxScoreJson = json.str();
     return boxScoreJson.c_str();
+}
+
+const char* CareerGetBoxScoreJson(int day) {
+    return BoxScoreJson(career ? career->FindGameRecord(career->SeasonYear(), day) : nullptr);
+}
+const char* CareerGetLeagueBoxScoreJson(int day, const char* home) {
+    if (career && home) for (const auto& r : career->GameRecords())
+        if (r.season == career->SeasonYear() && r.day == day && r.homeName == home) return BoxScoreJson(&r);
+    return BoxScoreJson(nullptr);
 }
 
 const char* CareerVacation(const char* target) {
@@ -1777,6 +1803,13 @@ const char* CareerGetSummerJson() {
 
 void CareerSetSummerMode(int mode) {
     if (career) career->SetSummerLeagueMode(std::clamp(mode, 0, 2));
+}
+
+void CareerSetPlayerTraining(const char* id, const char* focus) {
+    if (career && id && focus) career->SetPlayerTraining(id, focus);
+}
+void CareerSetWeeklyTraining(const char* focus, int sessions, int intensity) {
+    if (career) career->SetWeeklyTraining(focus ? focus : "Shooting", sessions, intensity);
 }
 
 void CareerSetTrainingPlan(const char* focus, int intensity, int coachDevelopment) {

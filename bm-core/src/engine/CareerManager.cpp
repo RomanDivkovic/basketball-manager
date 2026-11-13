@@ -1,3 +1,4 @@
+#include "common/Ratings.h"
 #include "engine/CareerManager.h"
 #include "common/Traits.h"
 #include "db/LeagueImport.h"
@@ -155,6 +156,8 @@ void CareerManager::Start(const std::vector<std::shared_ptr<Team>>& teamList, co
 
     AssignInitialContracts();
     GenerateStartingFreeAgents(48);
+    GenerateProspects();
+    trainingProgress.clear(); individualTraining.clear();
     lastQuestionDay = regularStartDay;
 
     // Cap and tax line follow the league's own payrolls (custom leagues come with other salary levels)
@@ -177,19 +180,23 @@ void CareerManager::Start(const std::vector<std::shared_ptr<Team>>& teamList, co
     season.InitializeSeason(seasonYear, "NBA");
     season.LoadTeams(teams);
     season.GenerateSchedule();
+    season.SetGamePlayedHook([this](const SeasonManager::Game& g) {
+        if (g.homeTeam->teamId != userTeamId && g.awayTeam->teamId != userTeamId)
+            CaptureBox(RegularSeasonDay(), "Regular season", "regular", g.homeTeam, g.awayTeam, g.homeScore, g.awayScore);
+    });
 
     started = true;
     Acknowledge("newseason" + std::to_string(seasonYear));
     Post("Welcome", "Your career starts on " + FormatDate(today) + ". Opening night is " + FormatDate(regularStartDay) + ".");
 }
 
-void CareerManager::Post(const std::string& title, const std::string& text) {
+void CareerManager::Post(const std::string& title, const std::string& text, const std::string& action, const std::string& reference, int gameDay) {
     CareerEvent ev;
-    ev.day = today;
+    ev.day = today; ev.action = action; ev.reference = reference; ev.gameDay = gameDay;
     ev.title = title;
     ev.text = text;
     inbox.push_front(ev);
-    while (inbox.size() > 60) inbox.pop_back();
+    while (inbox.size() > 180) inbox.pop_back();
 }
 
 bool CareerManager::Acknowledge(const std::string& key) {
@@ -678,6 +685,8 @@ void CareerManager::AssistantRenewContracts() {
 
 void CareerManager::StepDay() {
     const CareerPhase phaseBefore = phase;
+    TrainDay();
+    if ((today - DateOf(seasonYear, 10, 1)) % 14 == 0 && !draftDone && (staffTasks & TASK_SCOUTING)) ScoutReport();
     UpdateMoodFromResults();
     for (const auto& t : teams) for (const auto& p : t->roster) p->seasonMood *= 0.996f;
     switch (phase) {
@@ -854,6 +863,7 @@ void CareerManager::RollOverSeason() {
     phase = CareerPhase::Preseason;
     draftOrder.clear();
     prospects.clear();
+    GenerateProspects();
     draftResults.clear();
     draftDone = false;
     summerMode = 0;
@@ -1133,6 +1143,7 @@ std::shared_ptr<Player> CareerManager::FindPlayer(const std::string& playerId) c
     for (const auto& t : teams) for (const auto& p : t->roster) if (p->playerId == playerId) return p;
     for (const auto& p : freeAgents) if (p->playerId == playerId) return p;
     for (const auto& p : prospects) if (p->playerId == playerId) return p;
+    for (const auto& p : customProspects) if (p->playerId == playerId) return p;
     return nullptr;
 }
 
@@ -1168,9 +1179,53 @@ void CareerManager::AssistantPlanFriendlies() {
     PlanFriendlies(others);
 }
 
+void CareerManager::ScoutReport() {
+    if (prospects.empty() && customProspects.empty() && !draftDone) GenerateProspects();
+    const auto& pool = customProspectsYear == DraftYear() && !customProspects.empty() ? customProspects : prospects;
+    if (pool.empty()) return;
+    auto board = pool;
+    std::sort(board.begin(), board.end(), [](const auto& a, const auto& b) {
+        return a->attributes.currentAbility + a->attributes.potentialAbility > b->attributes.currentAbility + b->attributes.potentialAbility;
+    });
+    int pick = 1;
+    auto standings = season.GetStandings("");
+    for (size_t i = 0; i < standings.size(); ++i) if (standings[i].team->teamId == userTeamId) pick = static_cast<int>(standings.size() - i);
+    if (!draftOrder.empty()) for (size_t i = 0; i < draftOrder.size(); ++i) if (draftOrder[i] == userTeamId) { pick = static_cast<int>(i + 1); break; }
+    const int weeks = std::max(0, (today - DateOf(seasonYear, 10, 1)) / 7);
+    const int uncertainty = std::max(2, 14 - weeks / 3);
+    std::vector<std::pair<double, std::shared_ptr<Player>>> matches;
+    auto team = UserTeam();
+    for (size_t rank = 0; rank < board.size(); ++rank) {
+        if (static_cast<int>(rank + 1) < pick - 5) continue;
+        auto p = board[rank];
+        const bool guard = p->position == Position::PG || p->position == Position::SG;
+        const bool forward = p->position == Position::SF || p->position == Position::PF;
+        const bool big = p->position == Position::PF || p->position == Position::C;
+        if (scoutFocus.find("guards") != std::string::npos && !guard) continue;
+        if ((scoutFocus.find("forwards") != std::string::npos || scoutFocus == "wings") && !forward) continue;
+        if (scoutFocus.find("bigs") != std::string::npos && !big) continue;
+        if (scoutFocus.find("all-around") != std::string::npos && std::abs(p->attributes.shooting - p->attributes.defense) > 4) continue;
+        if (scoutFocus.find("offense") != std::string::npos && p->attributes.shooting < p->attributes.defense) continue;
+        if (scoutFocus.find("defense") != std::string::npos && p->attributes.defense < p->attributes.shooting) continue;
+        double best = 50;
+        if (team) for (const auto& q : team->roster) if (q->position == p->position) best = std::max(best, static_cast<double>(q->attributes.currentAbility));
+        double fit = p->attributes.currentAbility + 0.3 * p->attributes.potentialAbility - 0.3 * best - 0.5 * std::abs(static_cast<int>(rank + 1) - pick);
+        matches.push_back({fit, p});
+    }
+    std::sort(matches.begin(), matches.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    Post("Scout update", "Projected pick #" + std::to_string(pick) + ". Focus: " + scoutFocus + ". Report uncertainty +/-" + std::to_string(uncertainty) + ".", "draft");
+    for (size_t i = 0; i < std::min<size_t>(3, matches.size()); ++i) {
+        auto p = matches[i].second;
+        const int rank = static_cast<int>(std::find(board.begin(), board.end(), p) - board.begin() + 1);
+        Post("Scout: " + FullName(*p), "Projected #" + std::to_string(rank) + ". Ability " + std::to_string(std::max(25, p->attributes.currentAbility - uncertainty)) + "-" + std::to_string(std::min(99, p->attributes.currentAbility + uncertainty)) + ". Potential " + std::to_string(std::max(25, p->attributes.potentialAbility - uncertainty)) + "-" + std::to_string(std::min(99, p->attributes.potentialAbility + uncertainty)) + ".", "player", p->playerId);
+    }
+}
+
 void CareerManager::SetStaff(int tasks, const std::string& focus, int offense, int defense) {
     staffTasks = tasks & 15;
+    const bool changed = scoutFocus != focus;
     scoutFocus = focus.empty() ? "best" : focus;
+    if (changed && (staffTasks & TASK_SCOUTING)) ScoutReport();
     staffOffense = offense < 0 ? -1 : std::clamp(offense, 0, 5);
     staffDefense = defense < 0 ? -1 : std::clamp(defense, 0, 5);
     PushLineup();
@@ -1204,6 +1259,29 @@ void CareerManager::RecordHonors() {
             if (s.team2) ++honors[s.team2->teamId].finals;
         }
     }
+}
+
+bool CareerManager::EditDetailedRatings(const std::string& playerId, const std::vector<int>& values) {
+    if (!openLeague) return false;
+    auto p = FindPlayer(playerId);
+    if (!p) return false;
+    const auto ratings = DetailedRatings(*p);
+    if (values.size() != ratings.size()) return false;
+    for (int v : values) if (v < 25 || v > 99) return false;
+    double sums[5] = {}, counts[5] = {};
+    int total = 0;
+    for (size_t i = 0; i < values.size(); ++i) {
+        p->detailedRatings[ratings[i].name] = values[i];
+        sums[ratings[i].group] += values[i]; counts[ratings[i].group]++;
+        total += values[i];
+    }
+    auto attr = [&](int group) { return std::clamp(static_cast<int>(std::lround((sums[group] / counts[group] - 28) / 3.45)), 1, 20); };
+    auto& a = p->attributes;
+    a.shooting = attr(0); a.pace = attr(1); a.physical = attr(1);
+    a.ballControl = attr(2); a.defense = attr(3); a.technical = attr(4);
+    a.currentAbility = std::clamp(static_cast<int>(std::lround(total / static_cast<double>(values.size()))), 25, 99);
+    a.potentialAbility = std::max(a.currentAbility, a.potentialAbility);
+    return true;
 }
 
 bool CareerManager::EditPlayer(const std::string& playerId, const PlayerEdit& edit, std::string* message) {
@@ -1607,7 +1685,7 @@ void CareerManager::PrepareDraft() {
         while (prospects.size() < picks) {
             prospects.push_back(MakePlayer(55 + static_cast<int>(rng() % 6), 62 + static_cast<int>(rng() % 8), 19 + static_cast<int>(rng() % 3), "D"));
         }
-    } else {
+    } else if (prospects.empty()) {
         GenerateProspects();
     }
 
@@ -1813,6 +1891,80 @@ void CareerManager::StepSummerLeagueDay() {
     }
 }
 
+bool CareerManager::CanMentor(const Player& veteran, const Player& youngster) {
+    if (veteran.playerId == youngster.playerId || veteran.age < 28 || veteran.age <= youngster.age) return false;
+    const int gap = std::abs(static_cast<int>(veteran.position) - static_cast<int>(youngster.position));
+    int leadership = 0;
+    for (const auto& r : DetailedRatings(veteran)) if (std::string(r.name) == "Leadership") leadership = r.value;
+    return gap <= 1 || (veteran.age >= 34 && leadership >= 85);
+}
+
+void CareerManager::SetMentoring(const std::string& mentorId, const std::string& menteeId) {
+    const std::string wantedMentor = mentorId, wantedMentee = menteeId;
+    mentor.clear(); mentee.clear();
+    auto team = UserTeam();
+    if (!team) return;
+    std::shared_ptr<Player> a, b;
+    for (const auto& p : team->roster) {
+        if (p->playerId == wantedMentor) a = p;
+        if (p->playerId == wantedMentee) b = p;
+    }
+    if (a && b && CanMentor(*a, *b)) { mentor = wantedMentor; mentee = wantedMentee; }
+}
+
+void CareerManager::SetWeeklyTraining(const std::string& focus, int sessions, int intensity) {
+    static const std::set<std::string> valid{"Shooting", "Defense", "Playmaking", "Physical", "Stamina"};
+    weeklyFocus = valid.count(focus) ? focus : "Shooting";
+    weeklySessions = std::clamp(sessions, 0, 7);
+    weeklyIntensity = std::clamp(intensity, 1, 3);
+}
+
+void CareerManager::SetPlayerTraining(const std::string& id, const std::string& focus) {
+    auto team = UserTeam();
+    if (!team) return;
+    bool mine = false;
+    for (const auto& p : team->roster) if (p->playerId == id) mine = true;
+    if (!mine) return;
+    const std::set<std::string> valid{"Shooting", "Defense", "Playmaking", "Physical", "Stamina"};
+    if (focus == "Team plan") individualTraining.erase(id);
+    else if (valid.count(focus)) individualTraining[id] = focus;
+}
+
+void CareerManager::TrainDay() {
+    const bool inSeason = phase == CareerPhase::Preseason || phase == CareerPhase::RegularSeason || phase == CareerPhase::PlayIn || phase == CareerPhase::Playoffs;
+    // Evenly distribute the chosen sessions over a week; zero is a rest-only schedule.
+    const int weekday = (WeekdayOfDays(today) + 6) % 7;
+    const bool session = inSeason && ((weekday + 1) * weeklySessions / 7 > weekday * weeklySessions / 7);
+    auto team = UserTeam();
+    if (!team) return;
+    std::shared_ptr<Player> veteran;
+    for (const auto& p : team->roster) if (p->playerId == mentor) veteran = p;
+    for (const auto& p : team->roster) {
+        p->trainingFatigue = std::max(0.0f, p->trainingFatigue - 0.045f);
+        if (!session || p->injured) continue;
+        p->trainingFatigue = std::min(0.65f, p->trainingFatigue + 0.035f * weeklyIntensity);
+        if (p->age > 30 || p->attributes.currentAbility >= p->attributes.potentialAbility) continue;
+        float gain = 0.025f * weeklyIntensity * (0.5f + coachDevelopment / 100.0f);
+        if (p->minutesPlayedThisGame > 0) gain *= 1.25f;
+        if (p->trainingFatigue > 0.35f) gain *= 0.5f;
+        if (veteran && p->playerId == mentee && CanMentor(*veteran, *p)) gain *= 1.25f;
+        auto& progress = trainingProgress[p->playerId];
+        progress += gain;
+        if (progress < 1.0f) continue;
+        progress -= 1.0f;
+        const std::string focus = individualTraining.count(p->playerId) ? individualTraining.at(p->playerId) : weeklyFocus;
+        auto& a = p->attributes;
+        int* target = focus == "Defense" ? &a.defense : focus == "Playmaking" ? &a.ballControl
+            : focus == "Physical" ? &a.pace : focus == "Stamina" ? &a.physical : &a.shooting;
+        *target = std::min(20, *target + 1);
+        const int group = focus == "Defense" ? 3 : focus == "Playmaking" ? 2 : (focus == "Physical" || focus == "Stamina") ? 1 : 0;
+        for (const auto& r : DetailedRatings(*p)) if (r.group == group && p->detailedRatings.count(r.name))
+            p->detailedRatings[r.name] = std::min(99, r.value + 3);
+        a.currentAbility = std::min(a.potentialAbility, a.currentAbility + 1);
+        Post("Training progress", p->firstName + " " + p->lastName + " improved through " + focus + " training.");
+    }
+}
+
 void CareerManager::SetTrainingPlan(const std::string& focus, int intensity, int development) {
     campFocus = focus.empty() ? "Shooting" : focus;
     campIntensity = std::clamp(intensity, 1, 3);
@@ -1848,6 +2000,7 @@ int CareerManager::RollProgression(const Player& p, bool isUserTeam, bool summer
 }
 
 void CareerManager::ApplyDelta(Player& p, int delta, bool isUserTeam) {
+    for (auto& r : p.detailedRatings) r.second = std::clamp(r.second + delta, 25, 99);
     auto& a = p.attributes;
     a.currentAbility = std::clamp(a.currentAbility + delta, 40, 99);
     a.potentialAbility = std::max(a.potentialAbility, a.currentAbility);
@@ -1914,10 +2067,8 @@ void CareerManager::ApplyProgression() {
         if (count > 0) offset = talentAnchor - sum / count;
     }
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    bool mentorPresent = false;
-    if (auto userTeam = FindTeam(userTeamId)) {
-        for (const auto& p : userTeam->roster) if (!mentor.empty() && p->playerId == mentor) mentorPresent = true;
-    }
+    SetMentoring(mentor, mentee);
+    const bool mentorPresent = !mentor.empty();
     for (const auto& c : changes) {
         const double mentoring = (c.user && mentorPresent && c.player->playerId == mentee) ? 0.8 : 0.0;
         const double wanted = c.delta + offset + mentoring;
@@ -2024,7 +2175,8 @@ void CareerManager::ExpireInjuries() {
                 news.title = "Back from injury";
                 news.detail = FullName(*back) + " is fit again and available for selection.";
                 news.playerId = back->playerId;
-                newsQueue.push_back(news);
+                Post(news.title, news.detail, "player", news.playerId);
+            newsQueue.push_back(news);
             }
         }
         for (const auto& p : freeAgents) if (p->playerId == it->first) p->injured = false;
@@ -2039,7 +2191,7 @@ void CareerManager::RollInjuries() {
         for (const auto& p : team->roster) if (!p->injured) ++healthy;
         for (const auto& p : std::vector<std::shared_ptr<Player>>(team->roster)) {
             if (p->injured || healthy <= 9) continue;
-            if (roll(rng) > 0.0012) continue;
+            if (roll(rng) > 0.0012 * (1.0 + 3.0 * p->trainingFatigue)) continue;
             const double u = roll(rng);
             int days = u < 0.55 ? 2 + static_cast<int>(rng() % 6) : (u < 0.88 ? 8 + static_cast<int>(rng() % 14) : 22 + static_cast<int>(rng() % 50));
             p->injured = true;
@@ -2062,6 +2214,7 @@ void CareerManager::RollInjuries() {
             if (wasStarter && fit.size() > 5) news.detail += " " + FullName(*fit[4]) + " moves into the starting five.";
             else if (!wasStarter) news.detail += " He was not in your starting five, so the lineup is unchanged.";
             news.playerId = p->playerId;
+            Post(news.title, news.detail, "player", news.playerId);
             newsQueue.push_back(news);
         }
     }
@@ -2298,13 +2451,14 @@ void CareerManager::CaptureBox(int day, const std::string& label, const std::str
     record.home = lines(home);
     record.away = lines(away);
     // The coach's engine always plays his team as the home side; keep the real venue in the record
-    gameRecords.erase(std::remove_if(gameRecords.begin(), gameRecords.end(), [&](const GameRecord& r) { return r.season == seasonYear && r.day == day && r.kind == kind; }), gameRecords.end());
+    gameRecords.erase(std::remove_if(gameRecords.begin(), gameRecords.end(), [&](const GameRecord& r) { return r.season == seasonYear && r.day == day && r.kind == kind && r.homeName == home->name; }), gameRecords.end());
+    Post(home->name + " " + std::to_string(homeScore) + " - " + std::to_string(awayScore) + " " + away->name, label + " - open box score", "game", home->name, day);
     gameRecords.push_back(record);
-    if (gameRecords.size() > 260) gameRecords.erase(gameRecords.begin());
+    gameRecords.erase(std::remove_if(gameRecords.begin(), gameRecords.end(), [&](const GameRecord& r) { return r.season < seasonYear - 2; }), gameRecords.end());
 }
 
 const GameRecord* CareerManager::FindGameRecord(int season, int day) const {
-    for (const auto& r : gameRecords) if (r.season == season && r.day == day && r.kind == "regular") return &r;
+    for (const auto& r : gameRecords) if (r.season == season && r.day == day && r.kind == "regular" && (r.homeName == UserTeam()->name || r.awayName == UserTeam()->name)) return &r;
     return nullptr;
 }
 
@@ -2368,7 +2522,8 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
             {"season_year", std::to_string(seasonYear)}, {"salary_cap", std::to_string(salaryCap)}, {"luxury_line", std::to_string(luxuryLine)},
             {"talent_anchor", std::to_string(talentAnchor)}, {"wins", std::to_string(completedWins)}, {"losses", std::to_string(completedLosses)},
             {"titles", std::to_string(titlesWon)}, {"next_prospect", std::to_string(nextProspectId)}, {"retired_players", std::to_string(retiredPlayerCount)},
-            {"camp_focus", campFocus}, {"camp_intensity", std::to_string(campIntensity)}, {"coach_development", std::to_string(coachDevelopment)},
+            {"weekly_focus", weeklyFocus}, {"weekly_sessions", std::to_string(weeklySessions)}, {"weekly_intensity", std::to_string(weeklyIntensity)},
+            {"mentor", mentor}, {"mentee", mentee}, {"camp_focus", campFocus}, {"camp_intensity", std::to_string(campIntensity)}, {"coach_development", std::to_string(coachDevelopment)},
             {"phase", std::to_string(static_cast<int>(phase))}, {"today", std::to_string(today)}, {"stage_start", std::to_string(stageStartDay)},
             {"champion", championName}, {"season_result", seasonResult}, {"season_counted", seasonCounted ? "1" : "0"},
             {"draft_done", draftDone ? "1" : "0"}, {"custom_year", std::to_string(customProspectsYear)},
@@ -2464,6 +2619,21 @@ bool CareerManager::SaveState(sqlite3* db, std::string* error) const {
         sqlite3_finalize(st);
     }
     if (auto st = prepare("INSERT INTO career_lists VALUES (?,?,?)")) {
+        auto writeExtra = [&](const std::string& kind, const std::string& value) {
+            sqlite3_reset(st); text(st, 1, kind); sqlite3_bind_int(st, 2, 0); text(st, 3, value);
+            if (sqlite3_step(st) != SQLITE_DONE) ok = false;
+        };
+        auto extraPlayer = [&](const std::shared_ptr<Player>& p) {
+            for (const auto& r : p->detailedRatings) writeExtra("rating:" + p->playerId + ":" + r.first, std::to_string(r.second));
+            writeExtra("readiness:" + p->playerId, std::to_string(p->trainingFatigue));
+        };
+        for (const auto& t : teams) for (const auto& p : t->roster) extraPlayer(p);
+        for (const auto& p : freeAgents) extraPlayer(p);
+        for (const auto& p : prospects) extraPlayer(p);
+        for (const auto& p : customProspects) extraPlayer(p);
+        for (const auto& kv : individualTraining) writeExtra("focus:" + kv.first, kv.second);
+        for (const auto& kv : trainingProgress) writeExtra("progress:" + kv.first, std::to_string(kv.second));
+
         auto list = [&](const char* kind, const std::vector<std::string>& items) {
             int index = 0;
             for (const auto& item : items) {
@@ -2709,6 +2879,8 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     titlesWon = number("titles", 0);
     nextProspectId = number("next_prospect", 1);
     retiredPlayerCount = number("retired_players", 0);
+    SetWeeklyTraining(values.count("weekly_focus") ? values["weekly_focus"] : "Shooting", number("weekly_sessions", 2), number("weekly_intensity", 2));
+    SetMentoring(values["mentor"], values["mentee"]);
     if (values.count("camp_focus")) campFocus = values["camp_focus"];
     campIntensity = number("camp_intensity", campIntensity);
     coachDevelopment = number("coach_development", coachDevelopment);
@@ -2745,7 +2917,17 @@ bool CareerManager::LoadState(sqlite3* db, std::string* error) {
     if (sqlite3_prepare_v2(db, "SELECT kind, value FROM career_lists ORDER BY kind, idx", -1, &st, nullptr) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             const std::string kind = ColumnText(st, 0);
-            if (kind == "draft_order") draftOrder.push_back(ColumnText(st, 1));
+            if (kind.rfind("focus:", 0) == 0) {
+                SetPlayerTraining(kind.substr(6), ColumnText(st, 1));
+            } else if (kind.rfind("rating:", 0) == 0) {
+                const auto sep = kind.find(':', 7);
+                if (sep != std::string::npos) if (auto p = FindPlayer(kind.substr(7, sep - 7)))
+                    p->detailedRatings[kind.substr(sep + 1)] = std::clamp(std::atoi(ColumnText(st, 1).c_str()), 25, 99);
+            } else if (kind.rfind("readiness:", 0) == 0) {
+                if (auto p = FindPlayer(kind.substr(10))) p->trainingFatigue = std::clamp(static_cast<float>(std::atof(ColumnText(st, 1).c_str())), 0.0f, 0.65f);
+            } else if (kind.rfind("progress:", 0) == 0) {
+                trainingProgress[kind.substr(9)] = std::clamp(static_cast<float>(std::atof(ColumnText(st, 1).c_str())), 0.0f, 1.0f);
+            } else if (kind == "draft_order") draftOrder.push_back(ColumnText(st, 1));
             else if (kind == "starters") userStarters.push_back(ColumnText(st, 1));
             else if (kind == "minutes") {
                 const std::string item = ColumnText(st, 1);

@@ -451,6 +451,7 @@ bool SeasonManager::PlayDayExcept(int dayNumber, const std::string& holdTeamId) 
             continue;
         }
         SimulateGameInPlace(game);
+        if (gamePlayedHook) gamePlayedHook(game);
         UpdateStandings(game);
         ++gamesPlayed;
     }
