@@ -626,9 +626,9 @@ void InitializeMatch(const char* homeTeamId, const char* awayTeamId) {
     }
     matchEngine = std::make_unique<bm::engine::MatchEngine>();
     matchEngine->SetHeadless(true);
-    {
+    if (career && (homeTeam->teamId == career->UserTeamId() || awayTeam->teamId == career->UserTeamId())) {
         std::unordered_map<std::string, int> minutes(career->UserMinutes().begin(), career->UserMinutes().end());
-        matchEngine->SetLineupOverride(true, career->UserStarters(), minutes);   // the coach's team is always the engine's home side
+        matchEngine->SetLineupOverride(homeTeam->teamId == career->UserTeamId(), career->UserStarters(), minutes);
     }
     matchEngine->InitializeMatch(homeTeam, awayTeam);
     matchEngine->SetBreaksEnabled(true);

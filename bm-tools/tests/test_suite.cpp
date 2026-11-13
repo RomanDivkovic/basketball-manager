@@ -1481,6 +1481,18 @@ void TestDevelopmentUpdates() {
     g_testsPassed++;
 }
 
+void TestStandaloneBridgeWithoutCareer() {
+    std::cout << "[TEST] Standalone bridge starts without a career...\n";
+    CareerEnd();
+    LoadDatabase("/tmp/basketball_manager_readable.db");
+    InitializeMatch("1", "2");
+    std::string initial = GetMatchStateJson();
+    TEST_ASSERT(initial.find("\"homeTeam\":") != std::string::npos, "Standalone match initializes without a career");
+    EndMatchBreak();
+    TEST_ASSERT(StepMatchSeconds(2) > 0, "Standalone match advances after the pre-match break");
+    g_testsPassed++;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "  Basketball Manager Core Automated Tests\n";
@@ -1495,6 +1507,7 @@ int main() {
     TestTeamTalkFitsTheSituation();
     TestOffenseSchemesPlaybookAndFeedback();
     TestBridgeSeasonAndPlayoffs();
+    TestStandaloneBridgeWithoutCareer();
     TestYearScheduleIsAFullSeason();
     TestCareerYearFlow();
     TestVacationLetsTheAssistantRunTheClub();

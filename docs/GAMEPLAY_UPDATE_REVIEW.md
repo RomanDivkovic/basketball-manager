@@ -1,6 +1,6 @@
 # Gameplay update review
 
-Branches: `feat/gameplay-development-updates` in the engine and Unity repositories. The engine branch includes existing traits/trades and staff/settings prerequisites that the current UI already calls. Merge the Unity PR first, then the engine PR carrying its submodule pointer. No automatic merge is enabled.
+Branches: `feat/gameplay-development-updates` in the engine and Unity repositories. PRs: [Unity #13](https://github.com/RomanDivkovic/UI-unity-bm26/pull/13), [engine #33](https://github.com/RomanDivkovic/basketball-manager/pull/33). The engine branch includes existing traits/trades and staff/settings prerequisites that the current UI already calls. Merge the Unity PR first, then the engine PR carrying its submodule pointer. No automatic merge is enabled.
 
 ## Behavior
 
@@ -19,7 +19,9 @@ Branches: `feat/gameplay-development-updates` in the engine and Unity repositori
 
 ## Validation and release gates
 
-Automated: native build/test suite; C# compiler checks against Unity's bundled .NET Standard 2.1 references for Editor, macOS, Windows, Android and iOS; universal macOS plugin build and exported API checks.
+Standalone match startup also guards the absence of a career, and the bridge smoke check explicitly leaves the pre-match break before advancing.
+
+Automated: native build/test suite and standalone bridge smoke; C# compiler checks against Unity's bundled .NET Standard 2.1 references for Editor, macOS, Windows, Android and iOS; universal macOS plugin build and exported API checks.
 
 Unity's batch editor could not complete licensing initialization on this machine. Therefore rendered layouts, pointer/touch behavior and full player builds remain unverified. Before release:
 
