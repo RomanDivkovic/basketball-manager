@@ -57,6 +57,9 @@ void MatchEngine::SetLineupOverride(bool isHomeTeam, const std::vector<std::stri
 void MatchEngine::InitializeMatch(std::shared_ptr<Team> homeTeam, std::shared_ptr<Team> awayTeam) {
     std::cout << "[MatchEngine] Initializing 48-minute match: " << homeTeam->name << " vs " << awayTeam->name << "\n";
 
+    traitStreaks.clear();
+    recentEvents.clear();
+
     // Guarantee a 12-man rotation for each side (pad with placeholders if needed)
     EnsureMinimumRoster(homeTeam);
     EnsureMinimumRoster(awayTeam);
@@ -339,6 +342,96 @@ void MatchEngine::DetermineEntry(PossessionPlan& plan, PossessionEnd prevEnd, co
     plan.fastBreak = RandomFloat() < fastBreakChance;
 }
 
+// Two-point shot types: 1 dunk, 2 layup, 3 mid-range, 4 post
+static int PickShotKind(const Player& p, bool three) {
+    if (three) return 0;
+    const bool big = p.position == Position::C || p.position == Position::PF;
+    const float dunk = std::max(0.0f, p.attributes.physical - 10.0f) * 0.012f * (big ? 1.4f : 1.0f);
+    const float layup = 0.30f;
+    const float mid = 0.24f + 0.012f * p.attributes.shooting * (big ? 0.5f : 1.0f);
+    const float post = big ? 0.16f + 0.008f * p.attributes.physical : 0.03f;
+    float roll = RandomFloat() * (dunk + layup + mid + post);
+    if ((roll -= dunk) < 0.0f) return 1;
+    if ((roll -= layup) < 0.0f) return 2;
+    if ((roll -= mid) < 0.0f) return 3;
+    return 4;
+}
+
+bool MatchEngine::TraitActive(const Player& player, Trait trait) const {
+    if (!HasTrait(player.traits, trait)) return false;
+    auto it = traitStreaks.find(player.playerId);
+    const TraitStreak none;
+    const TraitStreak& s = it != traitStreaks.end() ? it->second : none;
+    switch (trait) {
+        case TRAIT_SHARPSHOOTER: return s.three >= 2;
+        case TRAIT_FLYING_HIGH: return s.dunk >= 2;
+        case TRAIT_POST_UP_DEMON: return s.post >= 2;
+        case TRAIT_NOT_IN_MY_HOUSE: return s.block >= 2;
+        case TRAIT_FLOOR_GENERAL: return s.assist >= 3;
+        case TRAIT_ALL_AROUND: {
+            if (recentEvents.size() < 3) return false;
+            int kinds = 0;
+            for (size_t i = recentEvents.size() - 3; i < recentEvents.size(); ++i) {
+                if (recentEvents[i].first != player.playerId) return false;
+                kinds |= 1 << recentEvents[i].second;
+            }
+            return kinds == 7;
+        }
+        default: return true;   // Mid-Range Demon and Cookie Monster are always on
+    }
+}
+
+// Updates the streaks a trait depends on; "nobody else scores" resets the scoring streaks of everyone else
+void MatchEngine::RecordTraitEvents(const PossessionPlan& plan) {
+    auto announce = [&](const std::shared_ptr<Player>& p, Trait t, bool wasActive) {
+        if (p && !wasActive && TraitActive(*p, t)) {
+            const char* name = t == TRAIT_SHARPSHOOTER ? "Sharpshooter" : t == TRAIT_FLYING_HIGH ? "Flying High" : t == TRAIT_POST_UP_DEMON ? "Post-Up Demon"
+                : t == TRAIT_NOT_IN_MY_HOUSE ? "Not In My House" : t == TRAIT_FLOOR_GENERAL ? "Floor General" : "All-Around";
+            EmitFeed(p->firstName + " " + p->lastName + " is on a roll: " + name + "!");
+        }
+    };
+    auto pushEvent = [&](const std::shared_ptr<Player>& p, int kind) {
+        const bool before = TraitActive(*p, TRAIT_ALL_AROUND);
+        recentEvents.emplace_back(p->playerId, kind);
+        if (recentEvents.size() > 3) recentEvents.erase(recentEvents.begin());
+        announce(p, TRAIT_ALL_AROUND, before);
+    };
+
+    if (plan.end == PossessionEnd::MadeShot && plan.primary) {
+        const std::string& id = plan.primary->playerId;
+        for (auto& kv : traitStreaks) {
+            if (kv.first != id) kv.second.three = kv.second.dunk = kv.second.mid = kv.second.post = 0;
+        }
+        TraitStreak& s = traitStreaks[id];
+        const bool wasThree = TraitActive(*plan.primary, TRAIT_SHARPSHOOTER), wasDunk = TraitActive(*plan.primary, TRAIT_FLYING_HIGH),
+                   wasPost = TraitActive(*plan.primary, TRAIT_POST_UP_DEMON);
+        s.three = plan.shotKind == 0 ? s.three + 1 : 0;
+        s.dunk = plan.shotKind == 1 ? s.dunk + 1 : 0;
+        s.mid = plan.shotKind == 3 ? s.mid + 1 : 0;
+        s.post = plan.shotKind == 4 ? s.post + 1 : 0;
+        announce(plan.primary, TRAIT_SHARPSHOOTER, wasThree);
+        announce(plan.primary, TRAIT_FLYING_HIGH, wasDunk);
+        announce(plan.primary, TRAIT_POST_UP_DEMON, wasPost);
+        if (plan.assisted && plan.passer) {
+            for (auto& kv : traitStreaks) if (kv.first != plan.passer->playerId) kv.second.assist = 0;
+            const bool wasGeneral = TraitActive(*plan.passer, TRAIT_FLOOR_GENERAL);
+            traitStreaks[plan.passer->playerId].assist++;
+            announce(plan.passer, TRAIT_FLOOR_GENERAL, wasGeneral);
+            pushEvent(plan.passer, 1);
+        }
+        pushEvent(plan.primary, 0);
+    } else if (plan.end == PossessionEnd::Block && plan.defender) {
+        for (auto& kv : traitStreaks) if (kv.first != plan.defender->playerId) kv.second.block = 0;
+        const bool was = TraitActive(*plan.defender, TRAIT_NOT_IN_MY_HOUSE);
+        traitStreaks[plan.defender->playerId].block++;
+        announce(plan.defender, TRAIT_NOT_IN_MY_HOUSE, was);
+    } else if (plan.end == PossessionEnd::OffensiveRebound && plan.rebounder) {
+        pushEvent(plan.rebounder, 2);
+    } else if (plan.end == PossessionEnd::DefensiveRebound && plan.defender) {
+        pushEvent(plan.defender, 2);
+    }
+}
+
 bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     if (!matchState || matchState->matchComplete) return false;
 
@@ -485,9 +578,23 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     }
     float schemeEfficiency = 0.0f;   // shot quality from the scheme, the called play and feedback
     float assistBonus = 0.0f;
+    float traitStealBonus = 0.0f;
+    float traitBlockBonus = 0.0f;
+    for (const auto& d : onCourtDefense) {
+        if (HasTrait(d->traits, TRAIT_COOKIE_MONSTER)) {
+            defensiveRating *= (d == defender) ? 1.05f : 1.02f;
+            traitStealBonus += (d == defender) ? 0.025f : 0.01f;
+        }
+        if (TraitActive(*d, TRAIT_NOT_IN_MY_HOUSE)) {
+            defensiveRating *= 1.04f;
+            traitBlockBonus += 0.05f;
+        }
+    }
+    if (TraitActive(*passer, TRAIT_FLOOR_GENERAL)) assistBonus += 0.10f;
+    if (TraitActive(*passer, TRAIT_ALL_AROUND)) assistBonus += 0.06f;
 
     // Base chances
-    float stealChance = 0.08f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.04f;
+    float stealChance = 0.08f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.04f + traitStealBonus;
     float foulChance = 0.12f + std::max(0.0f, defensiveIntensity - 1.0f) * 0.03f;
     float turnoverChance = 0.06f;
 
@@ -528,6 +635,7 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     if (offenseStrategy == OffensiveStrategy::BALL_MOVEMENT) assistBonus = 0.12f;
     else if (offenseStrategy == OffensiveStrategy::PICK_AND_ROLL) assistBonus = 0.05f;
     turnoverChance -= 0.03f * InstructionStrength(ballHandler->playerId, PlayerInstruction::SettleDown);
+    if (TraitActive(*ballHandler, TRAIT_FLOOR_GENERAL)) turnoverChance -= 0.025f;
     schemeEfficiency -= 0.015f * InstructionStrength(ballHandler->playerId, PlayerInstruction::LookForYourShot);
     turnoverChance = std::max(0.01f, turnoverChance);
     threePointChance = std::min(0.8f, std::max(0.1f, threePointChance));
@@ -547,7 +655,7 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         // Shooting foul leads to free throws
         plan.end = PossessionEnd::ShootingFoul;
         plan.actionPhase = "foul";
-        float ftPct = std::clamp(0.72f + (ballHandler->attributes.shooting / 20.0f) * 0.1f, 0.6f, 0.9f);
+        float ftPct = std::clamp(0.72f + (ballHandler->attributes.shooting / 20.0f) * 0.1f + (HasTrait(ballHandler->traits, TRAIT_MID_RANGE_DEMON) ? 0.04f : 0.0f), 0.6f, 0.93f);
         int attempts = 2;
         // Occasional and-1 or three-shot foul
         if (RandomFloat() < 0.1f) attempts = 3;
@@ -578,7 +686,24 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
         float fg3 = std::clamp(fg2 - 0.08f, 0.26f, 0.55f);
         float shotMakeProb = plan.isThree ? fg3 : fg2;
 
-        float blockChance = std::clamp(0.04f + defensiveIntensity * 0.03f, 0.02f, 0.12f);
+        // Traits add a little to the kind of shot they are about
+        plan.shotKind = PickShotKind(*ballHandler, plan.isThree);
+        float traitShot = 0.0f;
+        const Player& shooter = *ballHandler;
+        if (TraitActive(shooter, TRAIT_SHARPSHOOTER) && plan.shotKind == 0) traitShot += 0.07f;
+        if (TraitActive(shooter, TRAIT_FLYING_HIGH) && (plan.shotKind == 1 || plan.shotKind == 2)) traitShot += 0.06f;
+        if (HasTrait(shooter.traits, TRAIT_MID_RANGE_DEMON)) {
+            if (plan.shotKind == 3) traitShot += 0.05f;
+            else if (plan.shotKind == 1 || plan.shotKind == 2 || plan.shotKind == 4) traitShot += 0.025f;
+        }
+        if (TraitActive(shooter, TRAIT_POST_UP_DEMON)) {
+            if (plan.shotKind == 4) traitShot += 0.07f;
+            else if (plan.shotKind == 3 || plan.shotKind == 2 || plan.shotKind == 1) traitShot += 0.03f;
+        }
+        if (TraitActive(shooter, TRAIT_ALL_AROUND)) traitShot += 0.04f;
+        shotMakeProb = std::clamp(shotMakeProb + traitShot, 0.2f, 0.85f);
+
+        float blockChance = std::clamp(0.04f + defensiveIntensity * 0.03f + traitBlockBonus, 0.02f, 0.2f);
 
         if (RandomFloat() < blockChance) {
             // Blocked shot -> defensive rebound
@@ -603,15 +728,15 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
 
             if (offensiveRebound) {
                 plan.end = PossessionEnd::OffensiveRebound;
-                plan.rebounder = PickWeighted(onCourtOffense, [](const std::shared_ptr<Player>& p) {
-                    return 1.0f + p->attributes.physical;
+                plan.rebounder = PickWeighted(onCourtOffense, [this](const std::shared_ptr<Player>& p) {
+                    return (1.0f + p->attributes.physical) * (TraitActive(*p, TRAIT_ALL_AROUND) ? 1.5f : 1.0f);
                 });
                 oss << ballHandler->lastName << " misses, " << plan.rebounder->lastName << " with the offensive board.";
             } else {
                 plan.end = PossessionEnd::DefensiveRebound;
                 // Bigger, stronger defenders win more of the boards
-                plan.defender = PickWeighted(onCourtDefense, [](const std::shared_ptr<Player>& p) {
-                    return 1.0f + p->attributes.physical;
+                plan.defender = PickWeighted(onCourtDefense, [this](const std::shared_ptr<Player>& p) {
+                    return (1.0f + p->attributes.physical) * (TraitActive(*p, TRAIT_ALL_AROUND) ? 1.5f : 1.0f);
                 });
                 oss << ballHandler->lastName << " misses, rebound " << plan.defender->lastName << ".";
             }
@@ -619,6 +744,7 @@ bool MatchEngine::PlanPossession(PossessionPlan& plan) {
     }
 
     plan.summary = oss.str();
+    RecordTraitEvents(plan);
 
     // Remember how this possession ended so the next one can start from the right place
     lastEnd = plan.end;

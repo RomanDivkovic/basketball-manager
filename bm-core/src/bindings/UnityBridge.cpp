@@ -4,6 +4,8 @@
 #include "engine/CareerManager.h"
 #include "engine/MatchEngine.h"
 #include "engine/SeasonManager.h"
+#include "common/Traits.h"
+#include "common/Ratings.h"
 #include <algorithm>
 #include <cstdio>
 #include <iomanip>
@@ -163,6 +165,26 @@ std::shared_ptr<bm::Team> LoadTeam(const char* teamId) {
         team->roster.push_back(player);
     }
     sqlite3_finalize(roster);
+
+    // Traits come with leagues made after they were introduced; older files simply have no column
+    int hasTraitColumn = -1;
+    if (hasTraitColumn < 0) {
+        auto probe = database->PrepareStatement("SELECT 1 FROM pragma_table_info('players') WHERE name = 'traits'");
+        hasTraitColumn = probe && sqlite3_step(probe) == SQLITE_ROW ? 1 : 0;
+        if (probe) sqlite3_finalize(probe);
+    }
+    if (hasTraitColumn == 1) {
+        auto traitRows = database->PrepareStatement("SELECT player_id, traits FROM players WHERE team_id = ? AND traits != ''");
+        if (traitRows) {
+            sqlite3_bind_int(traitRows, 1, dbTeamId);
+            while (sqlite3_step(traitRows) == SQLITE_ROW) {
+                const std::string id = reinterpret_cast<const char*>(sqlite3_column_text(traitRows, 0));
+                const unsigned bits = bm::TraitsFromCsv(reinterpret_cast<const char*>(sqlite3_column_text(traitRows, 1)));
+                for (auto& p : team->roster) if (p->playerId == id) p->traits = bits;
+            }
+            sqlite3_finalize(traitRows);
+        }
+    }
     return team;
 }
 
@@ -1118,6 +1140,7 @@ const char* GetTeamRosterDetailsJson(const char* teamId) {
              << ",\"starter\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && std::find(career->UserStarters().begin(), career->UserStarters().end(), p->playerId) != career->UserStarters().end()) ? "true" : "false")
              << ",\"minutes\":" << ((career && teamId && career->UserTeamId() == std::string(teamId) && career->UserMinutes().count(p->playerId)) ? career->UserMinutes().at(p->playerId) : -1)
              << ",\"injured\":" << (p->injured ? "true" : "false")
+             << ",\"traits\":\"" << bm::TraitsToCsv(p->traits) << "\""
              << ",\"mood\":" << std::fixed << std::setprecision(2) << p->seasonMood
              << "}";
     }
@@ -1389,6 +1412,121 @@ const char* CareerStepDay() {
     return careerStopJson.c_str();
 }
 
+static std::string tradeJson;
+static std::string staffJson, friendliesJson, teamHomeJson;
+
+// What the assistant handles, the coaches' schemes and the injury list
+const char* CareerGetStaffJson() {
+    std::ostringstream json;
+    if (!career) { staffJson = "{}"; return staffJson.c_str(); }
+    json << "{\"tasks\":" << career->StaffTasks() << ",\"scoutFocus\":\"" << EscapeJson(career->ScoutFocus()) << "\",\"offense\":" << career->StaffOffense()
+         << ",\"defense\":" << career->StaffDefense() << ",\"open\":" << (career->OpenLeague() ? "true" : "false") << ",\"injuries\":[";
+    bool first = true;
+    for (const auto& i : career->UserInjuries()) {
+        json << (first ? "" : ",") << "{\"id\":\"" << EscapeJson(i.player->playerId) << "\",\"name\":\"" << EscapeJson(i.player->firstName + " " + i.player->lastName)
+             << "\",\"pos\":\"" << PositionToStr(i.player->position) << "\",\"back\":\"" << EscapeJson(bm::engine::FormatDate(i.backDay)) << "\",\"days\":"
+             << std::max(0, i.backDay - career->Today()) << "}";
+        first = false;
+    }
+    json << "]}";
+    staffJson = json.str();
+    return staffJson.c_str();
+}
+
+void CareerSetStaff(int tasks, const char* scoutFocus, int offense, int defense) {
+    if (career) career->SetStaff(tasks, scoutFocus ? scoutFocus : "best", offense, defense);
+}
+
+void CareerSetOpen(int open) { if (career) career->SetOpenLeague(open != 0); }
+
+// opponentsCsv: "id,id"; an empty list plays no friendlies
+int CareerPlanFriendlies(const char* opponentsCsv) {
+    if (!career) return 0;
+    std::vector<std::string> ids;
+    std::stringstream in(opponentsCsv ? opponentsCsv : "");
+    std::string item;
+    while (std::getline(in, item, ',')) if (!item.empty()) ids.push_back(item);
+    return career->PlanFriendlies(ids) ? 1 : 0;
+}
+
+const char* CareerGetFriendliesJson() {
+    std::ostringstream json;
+    json << "{\"planned\":" << (career && career->FriendliesPlanned() ? "true" : "false") << ",\"games\":[";
+    if (career) {
+        bool first = true;
+        for (const auto& g : career->Friendlies()) {
+            json << (first ? "" : ",") << "{\"date\":\"" << EscapeJson(bm::engine::FormatDate(g.day)) << "\",\"home\":\"" << EscapeJson(g.home->name)
+                 << "\",\"away\":\"" << EscapeJson(g.away->name) << "\",\"played\":" << (g.played ? "true" : "false")
+                 << ",\"homeScore\":" << g.homeScore << ",\"awayScore\":" << g.awayScore << ",\"userHome\":" << (g.home->teamId == career->UserTeamId() ? "true" : "false") << "}";
+            first = false;
+        }
+    }
+    json << "]}";
+    friendliesJson = json.str();
+    return friendliesJson.c_str();
+}
+
+// A club's home page: size, honours and finances
+const char* CareerGetTeamJson(const char* teamId) {
+    std::ostringstream json;
+    auto team = career && teamId ? career->FindTeam(teamId) : nullptr;
+    if (!team) { teamHomeJson = "{\"found\":false}"; return teamHomeJson.c_str(); }
+    int wins = 0, losses = 0;
+    for (const auto& rec : career->Season().GetStandings("")) if (rec.team->teamId == team->teamId) { wins = rec.wins; losses = rec.losses; }
+    double ovr = 0, age = 0;
+    for (const auto& p : team->roster) { ovr += p->attributes.currentAbility; age += p->age; }
+    const double n = std::max<size_t>(1, team->roster.size());
+    const auto honors = career->HonorsOf(team->teamId);
+    const int payroll = career->Payroll(team->teamId);
+    json << "{\"found\":true,\"id\":\"" << EscapeJson(team->teamId) << "\",\"name\":\"" << EscapeJson(team->name) << "\",\"conference\":\"" << EscapeJson(team->conferenceId)
+         << "\",\"mine\":" << (team->teamId == career->UserTeamId() ? "true" : "false") << ",\"prestige\":" << team->prestige << ",\"players\":" << team->roster.size()
+         << ",\"wins\":" << wins << ",\"losses\":" << losses << ",\"titles\":" << honors.titles << ",\"finals\":" << honors.finals << ",\"confTitles\":" << honors.conferenceTitles
+         << ",\"payroll\":" << payroll << ",\"cap\":" << career->SalaryCap() << ",\"luxury\":" << career->LuxuryLine()
+         << ",\"avgRating\":" << std::fixed << std::setprecision(1) << ovr / n << ",\"avgAge\":" << age / n << ",\"stars\":[";
+    std::vector<std::shared_ptr<bm::Player>> ranked = team->roster;
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a->attributes.currentAbility > b->attributes.currentAbility; });
+    for (size_t i = 0; i < ranked.size() && i < 3; ++i) {
+        json << (i ? "," : "") << "{\"id\":\"" << EscapeJson(ranked[i]->playerId) << "\",\"name\":\"" << EscapeJson(ranked[i]->firstName + " " + ranked[i]->lastName)
+             << "\",\"pos\":\"" << PositionToStr(ranked[i]->position) << "\",\"rating\":" << ranked[i]->attributes.currentAbility << "}";
+    }
+    json << "]}";
+    teamHomeJson = json.str();
+    return teamHomeJson.c_str();
+}
+
+// Open leagues only: changes a player's attributes, ratings, contract and traits
+int CareerEditPlayer(const char* playerId, int pace, int shooting, int ballControl, int defense, int physical, int technical,
+                     int ability, int potential, int salary, int contractEnd, const char* traitsCsv) {
+    if (!career || !playerId) return 0;
+    bm::engine::CareerManager::PlayerEdit edit{pace, shooting, ballControl, defense, physical, technical, ability, potential, salary, contractEnd,
+                                               bm::TraitsFromCsv(traitsCsv ? traitsCsv : "")};
+    return career->EditPlayer(playerId, edit, &careerMessage) ? 1 : 0;
+}
+
+int CareerTradesOpen() { return career && career->TradesOpen() ? 1 : 0; }
+
+// giveCsv / getCsv: "id,id"; execute = 0 only asks the other club what it thinks
+const char* CareerTrade(const char* teamId, const char* giveCsv, const char* getCsv, int execute) {
+    auto split = [](const char* text) {
+        std::vector<std::string> out;
+        std::stringstream in(text ? text : "");
+        std::string item;
+        while (std::getline(in, item, ',')) if (!item.empty()) out.push_back(item);
+        return out;
+    };
+    std::ostringstream json;
+    if (!career || !teamId) {
+        tradeJson = "{\"valid\":false,\"accepted\":false,\"executed\":false,\"message\":\"No career\"}";
+        return tradeJson.c_str();
+    }
+    const auto r = career->Trade(teamId, split(giveCsv), split(getCsv), execute != 0);
+    json << "{\"valid\":" << (r.valid ? "true" : "false") << ",\"accepted\":" << (r.accepted ? "true" : "false")
+         << ",\"executed\":" << (r.executed ? "true" : "false") << ",\"give\":" << static_cast<int>(r.giveValue) << ",\"get\":" << static_cast<int>(r.getValue)
+         << ",\"message\":\"" << EscapeJson(r.message) << "\"}";
+    tradeJson = json.str();
+    return tradeJson.c_str();
+}
+
 // startersCsv: "id,id,id,id,id"; minutesCsv: "id:minutes;id:minutes" (empty = automatic)
 int CareerSetLineup(const char* startersCsv, const char* minutesCsv) {
     if (!career) return 0;
@@ -1443,8 +1581,8 @@ const char* CareerGetPlayerJson(const char* playerId) {
          << ",\"weight\":" << std::setprecision(0) << player->weight << ",\"rating\":" << player->attributes.currentAbility
          << ",\"potential\":" << player->attributes.potentialAbility << ",\"pace\":" << player->attributes.pace << ",\"shooting\":" << player->attributes.shooting
          << ",\"ballControl\":" << player->attributes.ballControl << ",\"defense\":" << player->attributes.defense << ",\"physical\":" << player->attributes.physical
-         << ",\"technical\":" << player->attributes.technical << ",\"salary\":" << player->salary << ",\"endYear\":" << player->contractEndYear
-         << ",\"injured\":" << (player->injured ? "true" : "false") << ",\"mood\":" << std::setprecision(2) << player->seasonMood << ",\"seasons\":[";
+         << ",\"technical\":" << player->attributes.technical << ",\"salary\":" << player->salary << ",\"endYear\":" << player->contractEndYear << ",\"open\":" << (career->OpenLeague() ? "true" : "false") << ",\"marketValue\":" << career->MarketValue(*player) << ",\"cap\":" << career->SalaryCap()
+         << ",\"injured\":" << (player->injured ? "true" : "false") << ",\"traits\":\"" << bm::TraitsToCsv(player->traits) << "\",\"mood\":" << std::setprecision(2) << player->seasonMood << ",\"seasons\":[";
     bool first = true;
     auto add = [&](int season, const std::string& team, int kind, const bm::SeasonTotals& s) {
         json << (first ? "" : ",") << "{\"season\":" << season << ",\"team\":\"" << EscapeJson(team) << "\",\"kind\":" << kind << "," << TotalsJson(s) << "}";
@@ -1458,6 +1596,12 @@ const char* CareerGetPlayerJson(const char* playerId) {
         std::vector<bm::engine::SeasonStatRecord> rows = history->second;
         std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.season != b.season ? a.season > b.season : a.kind < b.kind; });
         for (const auto& r : rows) add(r.season, r.team, r.kind, r.line);
+    }
+    json << "],\"ratings\":[";
+    bool firstRating = true;
+    for (const auto& r : bm::DetailedRatings(*player)) {
+        json << (firstRating ? "" : ",") << "{\"group\":\"" << bm::RatingGroupName(r.group) << "\",\"name\":\"" << r.name << "\",\"value\":" << r.value << "}";
+        firstRating = false;
     }
     json << "]}";
     playerProfileJson = json.str();

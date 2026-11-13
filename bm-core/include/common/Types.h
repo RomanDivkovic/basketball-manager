@@ -90,6 +90,8 @@ struct Player {
     int salary = 0;             // dollars per season
     int contractEndYear = 0;    // last season (start year) the contract covers
     int age = 0;
+
+    unsigned traits = 0;        // bm::Trait bits (common/Traits.h)
 };
 
 // Team structure

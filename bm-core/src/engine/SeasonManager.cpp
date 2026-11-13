@@ -376,6 +376,17 @@ void SeasonManager::SimulateGameInPlace(Game& game) {
     lineupFor(true, game.homeTeam);
     lineupFor(false, game.awayTeam);
     matchEngine->InitializeMatch(game.homeTeam, game.awayTeam);
+    auto tacticsFor = [&](bool home, const std::shared_ptr<Team>& team) {
+        auto it = teamTactics.find(team->teamId);
+        if (it == teamTactics.end()) return;
+        auto manager = matchEngine->GetTacticalManager();
+        const auto offense = static_cast<OffensiveStrategy>(std::clamp(it->second.first, 0, 5));
+        const auto defense = static_cast<DefensiveStrategy>(std::clamp(it->second.second, 0, 5));
+        if (home) { manager->SetHomeOffensiveStrategy(offense); manager->SetHomeDefensiveStrategy(defense); }
+        else { manager->SetAwayOffensiveStrategy(offense); manager->SetAwayDefensiveStrategy(defense); }
+    };
+    tacticsFor(true, game.homeTeam);
+    tacticsFor(false, game.awayTeam);
     matchEngine->SimulateFullMatch();
     auto state = matchEngine->GetMatchState();
     game.homeScore = state->homeScore;
