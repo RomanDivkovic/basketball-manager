@@ -21,8 +21,13 @@ endif()
 add_subdirectory(bm-core)
 
 # Optional: UI will be handled separately via Unity
-# Optional: Tools
-add_subdirectory(bm-tools)
-
-# Export targets
-export(TARGETS BMCore FILE BasketballManagerTargets.cmake)
+# Tools and tests are only built on the desktop
+option(BM_BUILD_TOOLS "Build the tests and tools" ON)
+if(BM_BUILD_TOOLS)
+    add_subdirectory(bm-tools)
+    if(TARGET bm_sqlite)
+        export(TARGETS BMCore bm_lua bm_sqlite FILE BasketballManagerTargets.cmake)
+    else()
+        export(TARGETS BMCore bm_lua FILE BasketballManagerTargets.cmake)
+    endif()
+endif()
