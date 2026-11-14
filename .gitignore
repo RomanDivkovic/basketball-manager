@@ -82,3 +82,5 @@ UI-unity-bm26/*.sln
 UI-unity-bm26/*.slnx
 UI-unity-bm26/*.pidb
 UI-unity-bm26/*.userprefs
+# Generated release packages are delivered as artifacts, not source.
+/release/
