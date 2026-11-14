@@ -75,6 +75,8 @@ struct GameRecord {
 
 struct CareerEvent {
     int day = 0;
+    std::string action, reference;
+    int gameDay = 0;
     std::string title;
     std::string text;
 };
@@ -211,6 +213,55 @@ public:
     int Quote(const Player& player, int years, bool ownPlayer) const;   // salary he asks for that length
     bool RenewContract(const std::string& playerId, int years, std::string* message);
     bool ReleasePlayer(const std::string& playerId, std::string* message);
+
+    // ---- trades with the other clubs ----
+    struct TradeResult {
+        bool valid = false;        // the deal is legal (rosters, salaries, window)
+        bool accepted = false;     // the other club agrees
+        bool executed = false;
+        double giveValue = 0.0;    // what the coach sends, in the club's eyes
+        double getValue = 0.0;     // what he asks for
+        std::string message;
+    };
+    // ---- pre-season friendlies ----
+    struct FriendlyGame {
+        int day = 0;
+        std::shared_ptr<Team> home;
+        std::shared_ptr<Team> away;
+        bool played = false;
+        int homeScore = 0, awayScore = 0;
+    };
+    bool FriendliesPlanned() const { return friendliesPlanned; }
+    const std::vector<FriendlyGame>& Friendlies() const { return friendlies; }
+    bool PlanFriendlies(const std::vector<std::string>& opponentIds);   // 0 to 5 clubs, one game each
+
+    // ---- staff: what the assistant takes care of, scouting focus and the coaches' schemes ----
+    enum StaffTask { TASK_FRIENDLIES = 1, TASK_DEVELOPMENT = 2, TASK_SCOUTING = 4, TASK_CONTRACTS = 8 };
+    int StaffTasks() const { return staffTasks; }
+    const std::string& ScoutFocus() const { return scoutFocus; }
+    int StaffOffense() const { return staffOffense; }
+    int StaffDefense() const { return staffDefense; }
+    void SetStaff(int tasks, const std::string& focus, int offense, int defense);
+    struct InjuryInfo { std::shared_ptr<Player> player; int backDay = 0; };
+    std::vector<InjuryInfo> UserInjuries() const;
+
+    // ---- club history, and the open/closed league ----
+    struct TeamHonors { int titles = 0, finals = 0, conferenceTitles = 0; };
+    TeamHonors HonorsOf(const std::string& teamId) const;
+    bool EditDetailedRatings(const std::string& playerId, const std::vector<int>& ratings);
+    bool OpenLeague() const { return openLeague; }
+    void SetOpenLeague(bool open) { openLeague = open; }
+    struct PlayerEdit {
+        int pace, shooting, ballControl, defense, physical, technical;   // 1..20
+        int ability, potential;                                          // 40..99
+        int salary, contractEnd;
+        unsigned traits;
+    };
+    bool EditPlayer(const std::string& playerId, const PlayerEdit& edit, std::string* message);   // open leagues only
+    std::shared_ptr<Player> FindPlayer(const std::string& playerId) const;
+
+    bool TradesOpen() const;
+    TradeResult Trade(const std::string& teamId, const std::vector<std::string>& giveIds, const std::vector<std::string>& getIds, bool execute);
     const std::vector<std::shared_ptr<Player>>& FreeAgents() const { return freeAgents; }
     bool SignFreeAgent(const std::string& playerId, int years, std::string* message);
     bool FreeAgencyOpen() const;
@@ -218,7 +269,7 @@ public:
     // ---- draft ----
     bool DraftReady() const { return !draftOrder.empty(); }
     bool DraftFinished() const { return draftDone; }
-    const std::vector<std::shared_ptr<Player>>& Prospects() const { return prospects; }
+    const std::vector<std::shared_ptr<Player>>& Prospects() const { return customProspectsYear == DraftYear() && !customProspects.empty() ? customProspects : prospects; }
     const std::vector<DraftPickRecord>& DraftResults() const { return draftResults; }
     int DraftCursor() const { return static_cast<int>(draftResults.size()); }
     int DraftTotalPicks() const { return static_cast<int>(draftOrder.size()); }
@@ -244,7 +295,13 @@ public:
     std::vector<std::shared_ptr<Player>> SummerRoster(const std::string& teamId) const;
     void SetTrainingPlan(const std::string& focus, int intensity, int coachDevelopment);
     bool TrainingPlanSet() const { return campPlanned; }
-    void SetMentoring(const std::string& mentorId, const std::string& menteeId) { mentor = mentorId; mentee = menteeId; }
+    void SetMentoring(const std::string& mentorId, const std::string& menteeId);
+    static bool CanMentor(const Player& veteran, const Player& youngster);
+    void SetWeeklyTraining(const std::string& focus, int sessions, int intensity);
+    void SetPlayerTraining(const std::string& id, const std::string& focus);
+    std::string PlayerTraining(const std::string& id) const { auto it = individualTraining.find(id); return it == individualTraining.end() ? "Team plan" : it->second; }
+    int WeeklySessions() const { return weeklySessions; }
+    void TrainDay();
 
     // ---- roster limits ----
     static int MinRosterSize() { return 13; }
@@ -319,6 +376,10 @@ private:
     std::string mentor;
     std::string mentee;
     bool campPlanned = false;
+    std::string weeklyFocus = "Shooting";
+    int weeklySessions = 2, weeklyIntensity = 2;
+    std::map<std::string, float> trainingProgress;
+    std::map<std::string, std::string> individualTraining;
     int nextProspectId = 1;
     struct CareerRecord {
         int peak = 0;          // best rating seen
@@ -337,6 +398,18 @@ private:
     std::vector<std::string> userStarters;
     std::map<std::string, std::vector<SeasonStatRecord>> statHistory;
     void ArchiveSeasonStats();
+    std::vector<FriendlyGame> friendlies;
+    bool friendliesPlanned = false;
+    int staffTasks = 0;
+    std::string scoutFocus = "best";
+    int staffOffense = -1;   // -1 = not chosen: the club's own scheme
+    int staffDefense = -1;
+    std::map<std::string, TeamHonors> honors;
+    bool openLeague = false;
+    void AssistantPlanFriendlies();
+    void AssistantRenewContracts();
+    void RecordHonors();
+    void AwardTraits();                       // rare badges for players with the attributes and the seasons to back them up
     std::map<std::string, int> userMinutes;
     void PushLineup();
     std::map<std::string, int> injuredUntil;         // player id -> first day he is fit again
@@ -367,7 +440,8 @@ private:
     void StartPlayoffs();
     void EndPlayoffs();
     void RollOverSeason();
-    void Post(const std::string& title, const std::string& text);
+    void Post(const std::string& title, const std::string& text, const std::string& action = "", const std::string& reference = "", int gameDay = 0);
+    void ScoutReport();
     bool Acknowledge(const std::string& key);      // true the first time
 
     // contracts and rosters

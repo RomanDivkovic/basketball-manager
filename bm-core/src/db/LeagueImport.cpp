@@ -28,7 +28,7 @@ const char* kSchema =
     "jersey_number INTEGER DEFAULT 0, birth_date TEXT DEFAULT '2000-01-01', pace INTEGER DEFAULT 10,"
     "shooting INTEGER DEFAULT 10, ball_control INTEGER DEFAULT 10, defense INTEGER DEFAULT 10,"
     "physical INTEGER DEFAULT 10, technical INTEGER DEFAULT 10, current_ability INTEGER DEFAULT 70,"
-    "potential_ability INTEGER DEFAULT 75, active INTEGER DEFAULT 1, injured INTEGER DEFAULT 0,"
+    "potential_ability INTEGER DEFAULT 75, traits TEXT DEFAULT '', active INTEGER DEFAULT 1, injured INTEGER DEFAULT 0,"
     "suspension_matches INTEGER DEFAULT 0, international INTEGER DEFAULT 0, draft_eligible INTEGER DEFAULT 0,"
     "nil_value INTEGER DEFAULT 0, games_played REAL DEFAULT 0, minutes_played REAL DEFAULT 0,"
     "points_per_game REAL DEFAULT 0, rebounds_per_game REAL DEFAULT 0, assists_per_game REAL DEFAULT 0,"
@@ -261,6 +261,7 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
         int jersey = 0, ability = 70, potential = 75;
         double height = 2.0, weight = 100.0;
         int pace = 0, shooting = 0, ballControl = 0, defense = 0, physical = 0, technical = 0;
+        std::string traits;
     };
     std::vector<PlayerRow> playerRows;
     std::vector<int> perTeam(teamRows.size(), 0);
@@ -303,6 +304,7 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
         optionalInt("potential_ability", std::min(99, p.ability + 5), 40, 99, p.potential);
         p.potential = std::max(p.potential, p.ability);
         optionalInt("jersey_number", 0, 0, 99, p.jersey);
+        p.traits = Cell(players, r, ColumnOf(players, "traits"));
         const int base = std::clamp(static_cast<int>(p.ability / 5.0 + 0.5), 1, 20);
         optionalInt("pace", base, 1, 20, p.pace);
         optionalInt("shooting", base, 1, 20, p.shooting);
@@ -368,8 +370,8 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
         sqlite3_stmt* st = nullptr;
         sqlite3_prepare_v2(db,
             "INSERT INTO players (player_id, first_name, last_name, team_id, position, height, weight, jersey_number, birth_date,"
-            " pace, shooting, ball_control, defense, physical, technical, current_ability, potential_ability)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr);
+            " pace, shooting, ball_control, defense, physical, technical, current_ability, potential_ability, traits)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr);
         std::vector<int> counter(teamRows.size(), 0);
         for (const auto& p : playerRows) {
             sqlite3_reset(st);
@@ -392,6 +394,7 @@ LeagueImportResult ImportLeagueFromCsv(const std::string& folder, const std::str
             sqlite3_bind_int(st, 15, p.technical);
             sqlite3_bind_int(st, 16, p.ability);
             sqlite3_bind_int(st, 17, p.potential);
+            sqlite3_bind_text(st, 18, p.traits.c_str(), -1, SQLITE_TRANSIENT);
             if (sqlite3_step(st) != SQLITE_DONE) ok = false;
         }
         sqlite3_finalize(st);

@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 
 #include "common/Types.h"
 #include <memory>
@@ -48,6 +49,7 @@ public:
     void SetScheduleSeed(unsigned seed) { scheduleSeed = seed; hasScheduleSeed = true; }
     // Adds a finished game's box score of the team's players to their season totals
     void AddPlayerGameStats(const std::shared_ptr<Team>& team, bool playoffs);
+    void SetTeamTactics(const std::string& teamId, int offense, int defense) { teamTactics[teamId] = {offense, defense}; }   // from the staff, for games the assistant plays
     void SetTeamLineup(const std::string& teamId, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes) { teamLineups[teamId] = Lineup{starters, minutes}; }
     // Quiet = headless matches and no console output (used when a whole year is simulated)
     void SetQuiet(bool value);
@@ -59,6 +61,7 @@ public:
 
     // Days where one team's game is held back so the human coach can play it
     // Returns true when the held team has an unplayed game on that day.
+    void SetGamePlayedHook(std::function<void(const Game&)> hook) { gamePlayedHook = std::move(hook); }
     bool PlayDayExcept(int dayNumber, const std::string& holdTeamId);
     bool HasUnplayedGame(int dayNumber, const std::string& teamId, std::shared_ptr<Team>* home = nullptr, std::shared_ptr<Team>* away = nullptr) const;
     bool RecordResult(int dayNumber, const std::string& homeId, const std::string& awayId, int homeScore, int awayScore);
@@ -164,6 +167,7 @@ private:
     std::map<std::string, TeamRecord> standings;
     std::vector<Game> schedule;
     std::vector<FixtureDay> fixtureDays;
+    std::function<void(const Game&)> gamePlayedHook;
 
     int seasonYear;
     std::string leagueType;
@@ -175,6 +179,7 @@ private:
     std::shared_ptr<Team> champion;
     int gamesPerTeam = 82;
     struct Lineup { std::vector<std::string> starters; std::unordered_map<std::string, int> minutes; };
+    std::map<std::string, std::pair<int, int>> teamTactics;
     std::map<std::string, Lineup> teamLineups;   // the coach's choices by team id
     bool recordStats = true;
     unsigned scheduleSeed = 0;

@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    EndMatchBreak(); // standalone matches open with a pre-match break
     SetSimulationSpeed(6);
     const int elapsed = SimulatePossession();
     const char* updatedState = GetMatchStateJson();

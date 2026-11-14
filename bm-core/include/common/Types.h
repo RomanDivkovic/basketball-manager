@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 
 #include <string>
 #include <vector>
@@ -74,6 +75,8 @@ struct Player {
     // Match state (in-game tracking)
     bool onCourt;           // Currently playing
     float minutesPlayedThisGame;  // Accumulated minutes this match
+    std::map<std::string, int> detailedRatings;
+    float trainingFatigue = 0.0f; // readiness carried between games
     float fatigueLevel;     // 0.0 (fresh) to 1.0 (exhausted)
     int pointsThisGame;
     int reboundsThisGame;
@@ -90,6 +93,8 @@ struct Player {
     int salary = 0;             // dollars per season
     int contractEndYear = 0;    // last season (start year) the contract covers
     int age = 0;
+
+    unsigned traits = 0;        // bm::Trait bits (common/Traits.h)
 };
 
 // Team structure

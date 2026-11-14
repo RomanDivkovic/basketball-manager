@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
+#include "common/Traits.h"
 #include "engine/TacticalManager.h"
 #include <deque>
 #include <functional>
@@ -78,6 +79,7 @@ struct PossessionPlan {
     bool homeOffense = true;
     bool fastBreak = false;
     bool isThree = false;
+    int shotKind = 0;        // 0 three, 1 dunk, 2 layup, 3 mid-range, 4 post
     bool assisted = false;
     int duration = 0;        // game-clock seconds the possession uses
     int ftAttempts = 0;
@@ -198,6 +200,9 @@ public:
     // The coach's starting five and minute targets for one side; set before InitializeMatch, empty = automatic
     void SetLineupOverride(bool isHomeTeam, const std::vector<std::string>& starters, const std::unordered_map<std::string, int>& minutes);
 
+    // Temporary match instructions, measured in this team's attacks.
+    bool Shout(bool home, int command, const std::string& target = "");
+    int ShoutAttacksLeft(bool home) const { return shouts[home ? 0 : 1].attacks; }
     // Simulate single possession and return simulated seconds elapsed
     int SimulatePossession();
 
@@ -315,6 +320,8 @@ private:
     CoachingCallout awayLastCallout;    // Last callout issued to away team
     static constexpr int COACHING_MOMENTUM_DURATION = 8; // Possessions a callout affects play
 
+    struct ShoutState { int command = -1, attacks = 0; std::string target; };
+    ShoutState shouts[2];
     // Live playback state
     bool headless = false;
     std::deque<PossessionBeat> beatQueue;
@@ -399,6 +406,13 @@ private:
     // Offense plans, feedback and queued substitutions
     void ApplyPendingSubstitutions();
     float InstructionStrength(const std::string& playerId, PlayerInstruction type) const;
+
+    // Traits: streaks of events build up per player during a match
+    struct TraitStreak { int three = 0, dunk = 0, mid = 0, post = 0, block = 0, assist = 0; };
+    std::unordered_map<std::string, TraitStreak> traitStreaks;
+    std::vector<std::pair<std::string, int>> recentEvents;   // last stat events: kind 0 point, 1 assist, 2 rebound
+    bool TraitActive(const Player& player, Trait trait) const;
+    void RecordTraitEvents(const PossessionPlan& plan);
 
     // Statistical methods
     float CalculatePlaySuccessRate(const Player& player);
