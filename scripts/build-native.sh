@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the native BMCore library for one or all platforms and copies it into the Unity plugin folders.
-# Usage: scripts/build-native.sh [mac|win|android|ios|all]   (default: all)
+# Usage: scripts/build-native.sh [mac|mac-picker|win|android|ios|all]   (default: all)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGINS="$ROOT/UI-unity-bm26/Assets/Plugins"
@@ -19,6 +19,16 @@ mac() {
     cp "$NATIVE_BUILD_ROOT/mac"/lib/libBMCore.dylib "$PLUGINS/macOS/libBMCore.dylib"
     install_name_tool -id @rpath/libBMCore.dylib "$PLUGINS/macOS/libBMCore.dylib"
     codesign --force --sign - "$PLUGINS/macOS/libBMCore.dylib"
+    mac_picker
+}
+
+mac_picker() {
+    mkdir -p "$PLUGINS/macOS"
+    xcrun clang++ -std=c++17 -fobjc-arc -fvisibility=hidden -dynamiclib -arch arm64 -arch x86_64 \
+        -isysroot "$MAC_SDK" -mmacosx-version-min=12.0 -framework AppKit -framework UniformTypeIdentifiers \
+        -Wl,-install_name,@rpath/libBMFilePicker.dylib \
+        "$ROOT/UI-unity-bm26/NativePlugins/macOS/BMFilePicker.mm" -o "$PLUGINS/macOS/libBMFilePicker.dylib"
+    codesign --force --sign - "$PLUGINS/macOS/libBMFilePicker.dylib"
 }
 
 win() {
@@ -48,6 +58,7 @@ ios() {
 
 case "$TARGET" in
     mac) mac ;;
+    mac-picker) mac_picker ;;
     win) win ;;
     android) android ;;
     ios) ios ;;
