@@ -1,28 +1,29 @@
 # Basketball Manager 26 privacy policy
 
-Effective date: 15 November 2026
+Effective date: 17 November 2026
 
 Developer: Roman Divkovic
 
-This policy applies to the Unity macOS game **Basketball Manager 26**, bundle
+This policy applies to the Unity macOS and iOS game **Basketball Manager 26**, bundle
 identifier `com.romandivkovic.basketballmanager`, version 1.0.0.
 
-## Data on your Mac
+## Data on your device
 
 The game stores local account usernames, salted password hashes, recovery-code
-hashes, coach profiles, league databases and career saves on your Mac. Your
+hashes, coach profiles, league databases and career saves on your device. Your
 password is not stored as plain text. CSV files that you choose to import are
 copied into the game's local storage so they can be used for your league.
 
-The Mac App Store edition uses the macOS App Sandbox. Accounts, saves and
-imported data remain in the app's local data container. This version has no
+The Mac App Store edition uses the macOS App Sandbox. On iOS, the game uses
+the system app sandbox. Accounts, saves and imported data remain in the app's
+local data container. This version has no
 cloud save or cross-device account service.
 
 ## Data collection and sharing
 
-The Mac App Store edition does not transmit game accounts, passwords, league
+The App Store editions do not transmit game accounts, passwords, league
 files, career saves or usage analytics to the developer or third-party partners.
-It does not request a network entitlement. Advertising, Unity Analytics and
+The macOS edition does not request a network entitlement. Advertising, Unity Analytics and
 cloud crash reporting are disabled. The game contains no advertising or
 in-app purchases.
 
@@ -37,7 +38,7 @@ local data container. Removing the entire app data container removes the
 remaining local game data. Keep a separate backup if you want to retain your
 careers; deleting local data cannot be reversed by the developer.
 
-Your Mac's backup and device-management settings may separately control copies
+Your device's backup and device-management settings may separately control copies
 of local app data. These are not a cloud save service provided by the game.
 
 ## Support
